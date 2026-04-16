@@ -50,16 +50,18 @@ pub struct MainConfig {
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BlockList {
-    #[serde(default = "channels")]
+    #[serde(default = "block_keywords")]
+    pub keywords: Vec<String>,
+    #[serde(default = "block_channels")]
     pub channels: Vec<String>
 }
 
-const fn channels() -> Vec<String> {
-    return vec![]
-}
+const fn block_keywords() -> Vec<String> { return vec![] }
+const fn block_channels() -> Vec<String> { return vec![] }
 const fn blacklist() -> BlockList {
     BlockList {
-        channels: vec![]
+        channels: block_channels(),
+        keywords: block_keywords()
     }
 }
 

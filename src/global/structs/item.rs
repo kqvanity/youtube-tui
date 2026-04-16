@@ -5,7 +5,7 @@ use crate::global::common::{
 use crate::global::{functions::*, traits::CollectionItem};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
-
+use crate::config::BlockList;
 use super::Errors;
 
 /// Items are things like a single video/playlist and channel

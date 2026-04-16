@@ -13,6 +13,7 @@ use tui_additions::{
     framework::{FrameworkClean, FrameworkItem},
     widgets::{Grid, TextList},
 };
+use crate::items::filter::Filter;
 
 /// An item list displays a list of items
 // It consists of a 1 x 2 grid, with the left cell displaying a text list, the right displaying item info of the currently hovered item
@@ -418,16 +419,7 @@ impl FrameworkItem for ItemList {
                     .into_iter()
                     .map(|item| Item::from_search_item(item, image_index))
                     .filter(|item| {
-                        let channel_id = match item.clone() {
-                            Item::MiniVideo(video) => video.channel_id,
-                            Item::MiniPlaylist(playlist) => playlist.channel_id,
-                            Item::MiniChannel(channel) => channel.id,
-                            Item::FullVideo(video) => video.id,
-                            Item::FullPlaylist(playlist) => playlist.id,
-                            Item::FullChannel(channel) => channel.id,
-                            _ => "".to_string(),
-                        };
-                        !mainconfig.block_list.channels.contains(&channel_id)
+                        !item.matches(mainconfig.block_list.clone())
                     })
                     .collect();
                 if !self.items.is_empty() {
