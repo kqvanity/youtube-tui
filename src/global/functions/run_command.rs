@@ -513,6 +513,9 @@ pub fn run_single_command(
                 Err(e) => Message::Error(format!("Failed to block channel: {e}")),
             };
 
+            let status = framework.data.global.get_mut::<Status>().unwrap();
+            status.saved_list_state = status.last_list_state;
+
             let tasks = framework.data.state.get_mut::<Tasks>().unwrap();
             tasks.priority.push(Task::Reload);
 
@@ -542,6 +545,9 @@ pub fn run_single_command(
                 Err(e) => Message::Error(format!("Failed to unblock channel: {e}")),
             };
 
+            let status = framework.data.global.get_mut::<Status>().unwrap();
+            status.saved_list_state = status.last_list_state;
+
             let tasks = framework.data.state.get_mut::<Tasks>().unwrap();
             tasks.priority.push(Task::Reload);
 
@@ -566,6 +572,9 @@ pub fn run_single_command(
                 Err(e) => Message::Error(format!("Failed to block playlist: {e}")),
             };
             
+            let status = framework.data.global.get_mut::<Status>().unwrap();
+            status.saved_list_state = status.last_list_state;
+
             let tasks = framework.data.state.get_mut::<Tasks>().unwrap();
             tasks.priority.push(Task::Reload);
             *framework.data.global.get_mut::<Message>().unwrap() = message;
@@ -589,6 +598,9 @@ pub fn run_single_command(
                 Err(e) => Message::Error(format!("Failed to unblock playlist: {e}")),
             };
             
+            let status = framework.data.global.get_mut::<Status>().unwrap();
+            status.saved_list_state = status.last_list_state;
+
             let tasks = framework.data.state.get_mut::<Tasks>().unwrap();
             tasks.priority.push(Task::Reload);
             *framework.data.global.get_mut::<Message>().unwrap() = message;

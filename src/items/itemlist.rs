@@ -1,5 +1,6 @@
 use std::error::Error;
 
+use crate::items::filter::Filter;
 use crate::{
     config::*,
     global::{functions::*, structs::*, traits::SearchProviderWrapper},
@@ -13,7 +14,6 @@ use tui_additions::{
     framework::{FrameworkClean, FrameworkItem},
     widgets::{Grid, TextList},
 };
-use crate::items::filter::Filter;
 
 /// An item list displays a list of items
 // It consists of a 1 x 2 grid, with the left cell displaying a text list, the right displaying item info of the currently hovered item
@@ -418,9 +418,7 @@ impl FrameworkItem for ItemList {
                 self.items = SearchProviderWrapper::search(search)?
                     .into_iter()
                     .map(|item| Item::from_search_item(item, image_index))
-                    .filter(|item| {
-                        !item.matches(mainconfig.block_list.clone())
-                    })
+                    .filter(|item| !item.matches(mainconfig.block_list.clone()))
                     .collect();
                 if !self.items.is_empty() {
                     self.items.push(Item::Page(true));
@@ -436,8 +434,20 @@ impl FrameworkItem for ItemList {
         self.textlist.set_items(&self.items).unwrap();
         self.update(framework);
 
+        {
+            let status = framework.data.global.get_mut::<Status>().unwrap();
+            if let Some((selected, scroll)) = status.saved_list_state.take() {
+                self.textlist.selected = selected;
+                self.textlist.scroll = scroll;
+                if !self.items.is_empty() && self.textlist.selected >= self.items.len() {
+                    self.textlist.selected = self.items.len() - 1;
+                }
+            }
+        }
+
         let mainconfig = framework.data.global.get::<MainConfig>().unwrap();
         let status = framework.data.global.get::<Status>().unwrap();
+
         if mainconfig.images.display() {
             // download thumbnails of all videos in the list
             download_all_images(self.items.iter().map(|item| item.into()).collect());
@@ -588,6 +598,13 @@ impl FrameworkItem for ItemList {
 impl ItemList {
     // change `self.item` to the currently selected item
     pub fn update(&mut self, framework: &mut FrameworkClean) {
+        framework
+            .data
+            .global
+            .get_mut::<Status>()
+            .unwrap()
+            .last_list_state = Some((self.textlist.selected, self.textlist.scroll));
+
         let selected = self.items.get(self.textlist.selected);
 
         if selected.is_none() {
