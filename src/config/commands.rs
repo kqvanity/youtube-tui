@@ -251,6 +251,14 @@ fn playlist_default() -> Vec<HashMap<String, String>> {
             String::from("parrun ${browser} '${url}'"),
         )]),
         HashMap::from([(
+            String::from("Block playlist"),
+            String::from("block_playlist ${id}"),
+        )]),
+        HashMap::from([(
+            String::from("Unblock playlist"),
+            String::from("unblock_playlist ${id}"),
+        )]),
+        HashMap::from([(
             String::from("Toggle bookmark"),
             String::from("togglemark ${id}")
         )]),
@@ -307,6 +315,14 @@ fn saved_playlist_default() -> Vec<HashMap<String, String>> {
         HashMap::from([(
             String::from("Open in browser"),
             String::from("parrun ${browser} '${url}'"),
+        )]),
+        HashMap::from([(
+            String::from("Block playlist"),
+            String::from("block_playlist ${id}"),
+        )]),
+        HashMap::from([(
+            String::from("Unblock playlist"),
+            String::from("unblock_playlist ${id}"),
         )]),
         HashMap::from([(
             String::from("Toggle bookmark"),

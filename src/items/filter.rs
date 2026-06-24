@@ -8,6 +8,9 @@ pub trait Filter {
 impl Filter for Item {
     fn matches(&self, black_list: BlockList) -> bool {
         let blocked_channels = crate::global::structs::DatabaseManager::get_all_blocked_channels().unwrap_or_default();
+        let blocked_playlists = crate::global::structs::DatabaseManager::get_all_blocked_playlists().unwrap_or_default();
+        
+        let self_id = self.id().unwrap_or_default();
         
         struct Result {
             title: String,
@@ -32,7 +35,7 @@ impl Filter for Item {
             },
             Item::FullPlaylist(playlist) => Result{
                 title: playlist.title,
-                channel_id: playlist.id,
+                channel_id: playlist.channel_id,
                 channel_title: playlist.channel,
             },
             Item::MiniChannel(channel) => Result{
@@ -53,6 +56,7 @@ impl Filter for Item {
         };
         
         blocked_channels.contains(&result.channel_id) ||
+        blocked_playlists.contains(self_id) ||
         black_list.channels.contains(&result.channel_id) ||
             black_list.keywords.contains(&result.channel_title.to_lowercase()) ||
             black_list.keywords.iter().any(|x| {

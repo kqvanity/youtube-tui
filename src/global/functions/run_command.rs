@@ -507,15 +507,15 @@ pub fn run_single_command(
                     }
                 }
             };
-            
+
             let message = match crate::global::structs::DatabaseManager::block_channel(&id) {
                 Ok(_) => Message::Success(String::from("Channel blocked successfully")),
                 Err(e) => Message::Error(format!("Failed to block channel: {e}")),
             };
-            
+
             let tasks = framework.data.state.get_mut::<Tasks>().unwrap();
             tasks.priority.push(Task::Reload);
-            
+
             *framework.data.global.get_mut::<Message>().unwrap() = message;
             tasks.priority.push(Task::RenderAll);
         }
@@ -536,15 +536,61 @@ pub fn run_single_command(
                     }
                 }
             };
-            
+
             let message = match crate::global::structs::DatabaseManager::unblock_channel(&id) {
                 Ok(_) => Message::Success(String::from("Channel unblocked successfully")),
                 Err(e) => Message::Error(format!("Failed to unblock channel: {e}")),
             };
+
+            let tasks = framework.data.state.get_mut::<Tasks>().unwrap();
+            tasks.priority.push(Task::Reload);
+
+            *framework.data.global.get_mut::<Message>().unwrap() = message;
+            tasks.priority.push(Task::RenderAll);
+        }
+        ["block_playlist", identifier] => {
+            let id = if identifier.len() == 34 && identifier.starts_with("PL") {
+                identifier.to_string()
+            } else {
+                let splitted = identifier.split_once("list=");
+                match splitted {
+                    Some((_, actual_stuff)) if actual_stuff.len() >= 34 => {
+                        actual_stuff[0..34].to_string()
+                    }
+                    _ => identifier.to_string() 
+                }
+            };
+            
+            let message = match crate::global::structs::DatabaseManager::block_playlist(&id) {
+                Ok(_) => Message::Success(String::from("Playlist blocked successfully")),
+                Err(e) => Message::Error(format!("Failed to block playlist: {e}")),
+            };
             
             let tasks = framework.data.state.get_mut::<Tasks>().unwrap();
             tasks.priority.push(Task::Reload);
+            *framework.data.global.get_mut::<Message>().unwrap() = message;
+            tasks.priority.push(Task::RenderAll);
+        }
+        ["unblock_playlist", identifier] => {
+            let id = if identifier.len() == 34 && identifier.starts_with("PL") {
+                identifier.to_string()
+            } else {
+                let splitted = identifier.split_once("list=");
+                match splitted {
+                    Some((_, actual_stuff)) if actual_stuff.len() >= 34 => {
+                        actual_stuff[0..34].to_string()
+                    }
+                    _ => identifier.to_string()
+                }
+            };
             
+            let message = match crate::global::structs::DatabaseManager::unblock_playlist(&id) {
+                Ok(_) => Message::Success(String::from("Playlist unblocked successfully")),
+                Err(e) => Message::Error(format!("Failed to unblock playlist: {e}")),
+            };
+            
+            let tasks = framework.data.state.get_mut::<Tasks>().unwrap();
+            tasks.priority.push(Task::Reload);
             *framework.data.global.get_mut::<Message>().unwrap() = message;
             tasks.priority.push(Task::RenderAll);
         }

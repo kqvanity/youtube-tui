@@ -31,6 +31,15 @@ impl DatabaseManager {
         )
         .unwrap();
 
+        // Create the blocked_playlists table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS blocked_playlists (
+                id TEXT PRIMARY KEY
+            )",
+            [],
+        )
+        .unwrap();
+
         unsafe {
             let _ = DATABASE.set(Self {
                 conn: Mutex::new(conn),
@@ -79,6 +88,44 @@ impl DatabaseManager {
             set.insert(id?);
         }
 
+        Ok(set)
+    }
+
+    /// Block a playlist by its ID
+    pub fn block_playlist(id: &str) -> Result<()> {
+        let db = unsafe { DATABASE.get() }.expect("Database not initialized");
+        let conn = db.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO blocked_playlists (id) VALUES (?1)",
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    /// Unblock a playlist by its ID
+    pub fn unblock_playlist(id: &str) -> Result<()> {
+        let db = unsafe { DATABASE.get() }.expect("Database not initialized");
+        let conn = db.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM blocked_playlists WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    /// Retrieves all blocked playlists as a HashSet for quick lookup
+    pub fn get_all_blocked_playlists() -> Result<HashSet<String>> {
+        let db = unsafe { DATABASE.get() }.expect("Database not initialized");
+        let conn = db.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id FROM blocked_playlists")?;
+        
+        let blocked = stmt.query_map([], |row| row.get(0))?;
+        
+        let mut set = HashSet::new();
+        for id in blocked {
+            set.insert(id?);
+        }
+        
         Ok(set)
     }
 }
