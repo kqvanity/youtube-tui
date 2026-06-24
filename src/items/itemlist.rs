@@ -417,11 +417,19 @@ impl FrameworkItem for ItemList {
                 self.items = history.0.clone().into_iter().rev().collect();
             }
             Page::Search(search) => {
-                self.items = SearchProviderWrapper::search(search)?
-                    .into_iter()
-                    .map(|item| Item::from_search_item(item, image_index))
-                    .filter(|item| !item.matches(mainconfig.block_list.clone()))
-                    .collect();
+                let mut collected = Vec::new();
+                for p in 1..=search.page {
+                    let mut cur_search = search.clone();
+                    cur_search.page = p;
+                    let items = SearchProviderWrapper::search(&cur_search)?;
+                    let filtered: Vec<_> = items
+                        .into_iter()
+                        .map(|item| Item::from_search_item(item, image_index))
+                        .filter(|item| !item.matches(mainconfig.block_list.clone()))
+                        .collect();
+                    collected.extend(filtered);
+                }
+                self.items = collected;
             }
             _ => unreachable!("item `ItemList` cannot be used in `{page:?}`"),
         }
