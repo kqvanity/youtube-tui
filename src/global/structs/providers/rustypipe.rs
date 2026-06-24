@@ -248,7 +248,11 @@ impl SearchProviderTrait for RustyPipeWrapper {
             SearchFilterType::Channel => Some(ItemType::Channel),
         };
 
-        let (items, next_token) = if filters.page == 1 {
+        let chunk_size = 3; // Fetch 2 pages from API to simulate a bigger pagination chunk
+        let mut results = Vec::new();
+        let mut current_token = None;
+
+        if filters.page == 1 {
             let res = RUNTIME.get().unwrap().block_on(
                 self.0.query().search_filter(
                     filters.query.clone(),
@@ -259,29 +263,49 @@ impl SearchProviderTrait for RustyPipeWrapper {
                         .item_type_opt(r#type),
                 ),
             )?;
-            (res.items.items, res.items.ctoken)
+            results.extend(res.items.items);
+            current_token = res.items.ctoken;
+
+            for _ in 1..chunk_size {
+                if let Some(token) = current_token {
+                    let paginator = RUNTIME.get().unwrap().block_on(self.0.query().continuation(token, rustypipe::model::paginator::ContinuationEndpoint::Search, None))?;
+                    results.extend(paginator.items);
+                    current_token = paginator.ctoken;
+                } else {
+                    break;
+                }
+            }
         } else {
             let token_opt = {
                 let cache = self.1.lock().unwrap();
                 cache.get(&filters.to_string()).cloned()
             };
 
-            if let Some(token) = token_opt {
-                let paginator = RUNTIME.get().unwrap().block_on(self.0.query().continuation(token, rustypipe::model::paginator::ContinuationEndpoint::Search, None))?;
-                (paginator.items, paginator.ctoken)
+            if let Some(mut token) = token_opt {
+                for _ in 0..chunk_size {
+                    let paginator = RUNTIME.get().unwrap().block_on(self.0.query().continuation(token, rustypipe::model::paginator::ContinuationEndpoint::Search, None))?;
+                    results.extend(paginator.items);
+                    if let Some(next_tok) = paginator.ctoken {
+                        token = next_tok;
+                        current_token = Some(token.clone());
+                    } else {
+                        current_token = None;
+                        break;
+                    }
+                }
             } else {
                 return Ok(Vec::new());
             }
         };
 
-        if let Some(next_token) = next_token {
+        if let Some(next_token) = current_token {
             let mut next_filters = filters.clone();
             next_filters.page += 1;
             let mut cache = self.1.lock().unwrap();
             cache.insert(next_filters.to_string(), next_token);
         }
 
-        Ok(items
+        Ok(results
             .into_iter()
             .map(|item: YouTubeItem| match item {
                 YouTubeItem::Video(video) => SearchItem::Video(video_item_convert(video)),
