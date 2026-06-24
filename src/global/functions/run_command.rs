@@ -490,6 +490,56 @@ pub fn run_single_command(
                     .push(Task::RenderAll);
             }
         }
+        // 1-argument variants: channel ID inferred from env at runtime.
+        // Tries hover-channel-id first (search / feed), then id (channel display page).
+        ["tag", tag] => {
+            let id = env::var("hover-channel-id")
+                .or_else(|_| env::var("id"))
+                .unwrap_or_default();
+            if id.is_empty() || id == "invalid" {
+                *framework.data.global.get_mut::<Message>().unwrap() =
+                    Message::Error(String::from("No channel in context — hover over a channel first"));
+                framework.data.state.get_mut::<Tasks>().unwrap().priority.push(Task::RenderAll);
+                return;
+            }
+            run_single_command(&["tag", &id, tag], framework, terminal);
+        }
+        ["untag", tag] => {
+            let id = env::var("hover-channel-id")
+                .or_else(|_| env::var("id"))
+                .unwrap_or_default();
+            if id.is_empty() || id == "invalid" {
+                *framework.data.global.get_mut::<Message>().unwrap() =
+                    Message::Error(String::from("No channel in context — hover over a channel first"));
+                framework.data.state.get_mut::<Tasks>().unwrap().priority.push(Task::RenderAll);
+                return;
+            }
+            run_single_command(&["untag", &id, tag], framework, terminal);
+        }
+        ["toggletag", tag] => {
+            let id = env::var("hover-channel-id")
+                .or_else(|_| env::var("id"))
+                .unwrap_or_default();
+            if id.is_empty() || id == "invalid" {
+                *framework.data.global.get_mut::<Message>().unwrap() =
+                    Message::Error(String::from("No channel in context — hover over a channel first"));
+                framework.data.state.get_mut::<Tasks>().unwrap().priority.push(Task::RenderAll);
+                return;
+            }
+            run_single_command(&["toggletag", &id, tag], framework, terminal);
+        }
+        ["listtags"] => {
+            let id = env::var("hover-channel-id")
+                .or_else(|_| env::var("id"))
+                .unwrap_or_default();
+            if id.is_empty() || id == "invalid" {
+                *framework.data.global.get_mut::<Message>().unwrap() =
+                    Message::Error(String::from("No channel in context — hover over a channel first"));
+                framework.data.state.get_mut::<Tasks>().unwrap().priority.push(Task::RenderAll);
+                return;
+            }
+            run_single_command(&["listtags", &id], framework, terminal);
+        }
         ["tag", identifier, tag] => {
             let id = if identifier.len() == 24 {
                 identifier.to_string()
