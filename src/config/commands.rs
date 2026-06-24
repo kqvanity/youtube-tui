@@ -128,6 +128,10 @@ fn video_default() -> Vec<HashMap<String, String>> {
             String::from("sync ${channel-id}"),
         )]),
         HashMap::from([(
+            String::from("Toggle tag: music"),
+            String::from("toggletag ${channel-id} music"),
+        )]),
+        HashMap::from([(
             String::from("Block channel"),
             String::from("block ${channel-id}"),
         )]),
@@ -352,6 +356,14 @@ fn channel_default() -> Vec<HashMap<String, String>> {
         HashMap::from([(
             String::from("Subscribe to channel"),
             String::from("sync ${id}"),
+        )]),
+        HashMap::from([(
+            String::from("List tags"),
+            String::from("listtags ${id}"),
+        )]),
+        HashMap::from([(
+            String::from("Toggle tag: music"),
+            String::from("toggletag ${id} music"),
         )]),
         HashMap::from([(
             String::from("Block channel"),
