@@ -101,6 +101,30 @@ impl FrameworkItem for ItemInfo {
 
         let appearance = framework.data.global.get::<AppearanceConfig>().unwrap();
 
+        // Helper: look up subscription status + tags for a channel id
+        let sub_spans = |channel_id: &str| -> Vec<(String, Style)> {
+            let subscriptions = framework.data.global.get::<Subscriptions>().unwrap();
+            match subscriptions.0.iter().find(|s| s.channel.id == channel_id) {
+                Some(sub) => {
+                    let mut v = vec![(
+                        String::from("✓ Subscribed"),
+                        Style::default().fg(appearance.colors.item_info.sub_count),
+                    )];
+                    if !sub.tags.is_empty() {
+                        v.push((
+                            format!("  Tags: {}", sub.tags.join(", ")),
+                            Style::default().fg(appearance.colors.item_info.tag),
+                        ));
+                    }
+                    v
+                }
+                None => vec![(
+                    String::from("○ Not subscribed"),
+                    Style::default().fg(appearance.colors.item_info.published),
+                )],
+            }
+        };
+
         // Each "span" contains a string and a Style, and they are one line max each
         // A "text" is used for descriptions in video/playlist and channels, and starts a new line if the old one runs out
         let (spans, text) = match item {
@@ -137,6 +161,7 @@ impl FrameworkItem for ItemInfo {
                     format!("Uploaded by {}", minivideo.channel),
                     Style::default().fg(appearance.colors.item_info.author),
                 ));
+                out.0.extend(sub_spans(&minivideo.channel_id));
                 if let Some(published) = &minivideo.published {
                     out.0.push((
                         format!("Published {published}"),
@@ -175,8 +200,8 @@ impl FrameworkItem for ItemInfo {
                 ],
                 None,
             ),
-            Item::MiniChannel(minichannel) => (
-                vec![
+            Item::MiniChannel(minichannel) => {
+                let mut spans = vec![
                     (
                         String::from("[Channel]"),
                         Style::default().fg(appearance.colors.item_info.tag),
@@ -197,22 +222,22 @@ impl FrameworkItem for ItemInfo {
                         format!(
                             "{} video{}",
                             minichannel.video_count,
-                            if minichannel.video_count <= 1 {
-                                ""
-                            } else {
-                                "s"
-                            }
+                            if minichannel.video_count <= 1 { "" } else { "s" }
                         ),
                         Style::default().fg(appearance.colors.item_info.video_count),
                     ),
-                ],
-                Some((
-                    minichannel.description.clone(),
-                    Style::default().fg(appearance.colors.item_info.description),
-                )),
-            ),
-            Item::FullVideo(fullvideo) => (
-                vec![
+                ];
+                spans.extend(sub_spans(&minichannel.id));
+                (
+                    spans,
+                    Some((
+                        minichannel.description.clone(),
+                        Style::default().fg(appearance.colors.item_info.description),
+                    )),
+                )
+            }
+            Item::FullVideo(fullvideo) => {
+                let mut spans = vec![
                     (
                         String::from("[Video]"),
                         Style::default().fg(appearance.colors.item_info.tag),
@@ -244,12 +269,16 @@ impl FrameworkItem for ItemInfo {
                         format!("Published {}", fullvideo.published),
                         Style::default().fg(appearance.colors.item_info.published),
                     ),
-                ],
-                Some((
-                    fullvideo.description.clone(),
-                    Style::default().fg(appearance.colors.item_info.description),
-                )),
-            ),
+                ];
+                spans.extend(sub_spans(&fullvideo.channel_id));
+                (
+                    spans,
+                    Some((
+                        fullvideo.description.clone(),
+                        Style::default().fg(appearance.colors.item_info.description),
+                    )),
+                )
+            }
             Item::FullPlaylist(fullplaylist) => (
                 vec![
                     (
@@ -282,8 +311,8 @@ impl FrameworkItem for ItemInfo {
                     Style::default().fg(appearance.colors.item_info.description),
                 )),
             ),
-            Item::FullChannel(fullchannel) => (
-                vec![
+            Item::FullChannel(fullchannel) => {
+                let mut spans = vec![
                     (
                         if fullchannel.autogenerated {
                             String::from("[Auto generated]")
@@ -312,12 +341,16 @@ impl FrameworkItem for ItemInfo {
                         format!("Created at {}", fullchannel.created),
                         Style::default().fg(appearance.colors.item_info.published),
                     ),
-                ],
-                Some((
-                    fullchannel.description.clone(),
-                    Style::default().fg(appearance.colors.item_info.description),
-                )),
-            ),
+                ];
+                spans.extend(sub_spans(&fullchannel.id));
+                (
+                    spans,
+                    Some((
+                        fullchannel.description.clone(),
+                        Style::default().fg(appearance.colors.item_info.description),
+                    )),
+                )
+            }
             // Item::Unknown(searchitem_transitional) => (
             //     vec![(
             //         format!("Unknown type `{}`", searchitem_transitional.r#type),
