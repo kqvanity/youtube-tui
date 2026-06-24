@@ -490,6 +490,64 @@ pub fn run_single_command(
                     .push(Task::RenderAll);
             }
         }
+        ["block", identifier] => {
+            let id = if identifier.len() == 24 {
+                identifier.to_string()
+            } else {
+                let splitted = identifier.split_once("/channel/");
+
+                match splitted {
+                    Some((_, actual_stuff)) if actual_stuff.len() >= 24 => {
+                        actual_stuff[0..24].to_string()
+                    }
+                    _ => {
+                        *framework.data.global.get_mut::<Message>().unwrap() =
+                            Message::Error(String::from("Invalid identifier: no channel ID found"));
+                        return;
+                    }
+                }
+            };
+            
+            let message = match crate::global::structs::DatabaseManager::block_channel(&id) {
+                Ok(_) => Message::Success(String::from("Channel blocked successfully")),
+                Err(e) => Message::Error(format!("Failed to block channel: {e}")),
+            };
+            
+            let tasks = framework.data.state.get_mut::<Tasks>().unwrap();
+            tasks.priority.push(Task::Reload);
+            
+            *framework.data.global.get_mut::<Message>().unwrap() = message;
+            tasks.priority.push(Task::RenderAll);
+        }
+        ["unblock", identifier] => {
+            let id = if identifier.len() == 24 {
+                identifier.to_string()
+            } else {
+                let splitted = identifier.split_once("/channel/");
+
+                match splitted {
+                    Some((_, actual_stuff)) if actual_stuff.len() >= 24 => {
+                        actual_stuff[0..24].to_string()
+                    }
+                    _ => {
+                        *framework.data.global.get_mut::<Message>().unwrap() =
+                            Message::Error(String::from("Invalid identifier: no channel ID found"));
+                        return;
+                    }
+                }
+            };
+            
+            let message = match crate::global::structs::DatabaseManager::unblock_channel(&id) {
+                Ok(_) => Message::Success(String::from("Channel unblocked successfully")),
+                Err(e) => Message::Error(format!("Failed to unblock channel: {e}")),
+            };
+            
+            let tasks = framework.data.state.get_mut::<Tasks>().unwrap();
+            tasks.priority.push(Task::Reload);
+            
+            *framework.data.global.get_mut::<Message>().unwrap() = message;
+            tasks.priority.push(Task::RenderAll);
+        }
         ["syncall"] => {
             *framework.data.global.get_mut::<Message>().unwrap() =
                 Message::Message(String::from("Syncing..."));
@@ -733,6 +791,8 @@ fn help_msg(cmdefines: &CommandsRemapConfig) -> String {
     \x1b[33mtogglemark [id]\x1b[0m                 Toggle bookmark status
     \x1b[33msub/sync [id or url]\x1b[0m            Add channel to subscription, or sync an existing channel
     \x1b[33munsub [id or url]\x1b[0m               Remove channel from subscription
+    \x1b[33mblock [id or url]\x1b[0m               Block channel by ID or URL
+    \x1b[33munblock [id or url]\x1b[0m             Unblock channel by ID or URL
     \x1b[33msyncall\x1b[0m                         Sync all subscriptions
 
 \x1b[91mMPV:\x1b[0m

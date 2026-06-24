@@ -29,6 +29,7 @@ pub fn init(
     command: Option<&str>,
 ) -> Result<(), Box<dyn Error>> {
     LocalStore::init();
+    DatabaseManager::init();
     let home_dir = home_dir().unwrap();
     RUNTIME
         .set(Builder::new_current_thread().enable_all().build().unwrap())

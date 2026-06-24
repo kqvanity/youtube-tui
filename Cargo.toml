@@ -46,6 +46,7 @@ rustypipe = "0.11"
 futures = { version = "0.3", features = [ "executor" ] }
 tokio = { version = "1", features = [ "rt" ]}
 http_req = "0.14.1"
+rusqlite = { version = "0.31.0", features = ["bundled"] }
 
 # libmpv = { path = "libmpv-rs", optional = true, version = "2" }
 # tui-additions = {path = "../tui-additions", default-features = false, features = ["framework", "widgets"]}

@@ -13,6 +13,7 @@ mod state_env;
 mod status;
 mod subscriptions;
 mod tasks;
+mod db;
 
 mod providers;
 
@@ -34,3 +35,4 @@ pub use state_env::*;
 pub use status::*;
 pub use subscriptions::*;
 pub use tasks::*;
+pub use db::*;

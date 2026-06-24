@@ -2,11 +2,13 @@ use crate::config::BlockList;
 use crate::global::structs::Item;
 
 pub trait Filter {
-    fn matches(&self, black_list: BlockList) -> bool { false }
+    fn matches(&self, _black_list: BlockList) -> bool { false }
 }
 
 impl Filter for Item {
     fn matches(&self, black_list: BlockList) -> bool {
+        let blocked_channels = crate::global::structs::DatabaseManager::get_all_blocked_channels().unwrap_or_default();
+        
         struct Result {
             title: String,
             channel_title: String,
@@ -49,6 +51,8 @@ impl Filter for Item {
                 channel_title: "".to_string(),
             },
         };
+        
+        blocked_channels.contains(&result.channel_id) ||
         black_list.channels.contains(&result.channel_id) ||
             black_list.keywords.contains(&result.channel_title.to_lowercase()) ||
             black_list.keywords.iter().any(|x| {
