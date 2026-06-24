@@ -29,6 +29,10 @@ pub struct Status {
     pub provider_updated: bool,
     /// storage that is cleared every event loop
     pub storage: CloneMap,
+    /// saves scroll position across reloads
+    pub saved_list_state: Option<(usize, usize)>,
+    /// active state tracked continuously
+    pub last_list_state: Option<(usize, usize)>,
 }
 
 impl Key for Status {
@@ -49,6 +53,8 @@ impl Default for Status {
             provider: Provider::YouTube,
             provider_updated: false,
             storage: TypeMap::custom(),
+            saved_list_state: None,
+            last_list_state: None,
         }
     }
 }

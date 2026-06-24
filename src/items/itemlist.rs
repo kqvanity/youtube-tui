@@ -23,6 +23,7 @@ pub struct ItemList {
     pub items: Vec<Item>,
     pub textlist: TextList,
     pub grid: Grid,
+    pub exhausted: bool,
 }
 
 impl ItemList {
@@ -268,6 +269,7 @@ impl Default for ItemList {
                 vec![Constraint::Percentage(100)],
             )
             .unwrap(),
+            exhausted: false,
         }
     }
 }
@@ -420,12 +422,6 @@ impl FrameworkItem for ItemList {
                     .map(|item| Item::from_search_item(item, image_index))
                     .filter(|item| !item.matches(mainconfig.block_list.clone()))
                     .collect();
-                if !self.items.is_empty() {
-                    self.items.push(Item::Page(true));
-                }
-                if search.page != 1 {
-                    self.items.insert(0, Item::Page(false));
-                }
             }
             _ => unreachable!("item `ItemList` cannot be used in `{page:?}`"),
         }
@@ -483,7 +479,55 @@ impl FrameworkItem for ItemList {
         // move the textlist cursor in the corresponding directions
         let updated = match action {
             KeyAction::MoveUp => self.textlist.up().is_ok(),
-            KeyAction::MoveDown => self.textlist.down().is_ok(),
+            KeyAction::MoveDown => {
+                let ok = self.textlist.down().is_ok();
+                
+                // Infinite scrolling check near bottom
+                if self.textlist.selected >= self.items.len().saturating_sub(5) && !self.exhausted {
+                    if let Some(Page::Search(search)) = framework.data.state.get_mut::<Page>() {
+                        let mainconfig = framework.data.global.get::<MainConfig>().unwrap();
+                        let image_index = mainconfig.image_index;
+                        let block_list = mainconfig.block_list.clone();
+                        
+                        for _ in 0..5 {
+                            let mut next_search = search.clone();
+                            next_search.page += 1;
+                            
+                            if let Ok(new_items) = SearchProviderWrapper::search(&next_search) {
+                                if new_items.is_empty() {
+                                    self.exhausted = true;
+                                    break;
+                                }
+                                
+                                let filtered: Vec<_> = new_items.into_iter()
+                                    .map(|item| Item::from_search_item(item, image_index))
+                                    .filter(|item| !item.matches(block_list.clone()))
+                                    .collect();
+                                    
+                                search.page += 1;
+                                
+                                if !filtered.is_empty() {
+                                    let filtered_len = filtered.len();
+                                    self.items.extend(filtered);
+                                    if self.textlist.set_items(&self.items).is_err() {
+                                        break;
+                                    }
+                                    
+                                    if mainconfig.images.display() {
+                                        let offset = self.items.len() - filtered_len;
+                                        download_all_images(self.items[offset..].iter().map(|item| item.into()).collect());
+                                    }
+                                    break;
+                                }
+                            } else {
+                                self.exhausted = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                ok
+            }
             KeyAction::MoveLeft | KeyAction::First => self.textlist.first().is_ok(),
             KeyAction::MoveRight | KeyAction::End => self.textlist.last().is_ok(),
             KeyAction::Select => {
