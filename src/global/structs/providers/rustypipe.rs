@@ -17,8 +17,11 @@ use crate::{
     RUNTIME,
 };
 
+use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+
 #[derive(Clone)]
-pub struct RustyPipeWrapper(RustyPipe);
+pub struct RustyPipeWrapper(RustyPipe, Arc<Mutex<HashMap<String, String>>>);
 
 impl Default for RustyPipeWrapper {
     fn default() -> Self {
@@ -27,6 +30,7 @@ impl Default for RustyPipeWrapper {
                 .storage_dir(home::home_dir().unwrap().join(".local/share/rustypipe"))
                 .build()
                 .unwrap(),
+            Arc::new(Mutex::new(HashMap::new())),
         )
     }
 }
@@ -244,20 +248,40 @@ impl SearchProviderTrait for RustyPipeWrapper {
             SearchFilterType::Channel => Some(ItemType::Channel),
         };
 
-        let res = RUNTIME.get().unwrap().block_on(
-            self.0.query().search_filter(
-                filters.query.clone(),
-                &SearchFilter::new()
-                    .date_opt(date)
-                    .sort_opt(sort)
-                    .length_opt(duration)
-                    .item_type_opt(r#type),
-            ),
-        )?;
+        let (items, next_token) = if filters.page == 1 {
+            let res = RUNTIME.get().unwrap().block_on(
+                self.0.query().search_filter(
+                    filters.query.clone(),
+                    &SearchFilter::new()
+                        .date_opt(date)
+                        .sort_opt(sort)
+                        .length_opt(duration)
+                        .item_type_opt(r#type),
+                ),
+            )?;
+            (res.items.items, res.items.ctoken)
+        } else {
+            let token_opt = {
+                let cache = self.1.lock().unwrap();
+                cache.get(&filters.to_string()).cloned()
+            };
 
-        Ok(res
-            .items
-            .items
+            if let Some(token) = token_opt {
+                let paginator = RUNTIME.get().unwrap().block_on(self.0.query().continuation(token, rustypipe::model::paginator::ContinuationEndpoint::Search, None))?;
+                (paginator.items, paginator.ctoken)
+            } else {
+                return Ok(Vec::new());
+            }
+        };
+
+        if let Some(next_token) = next_token {
+            let mut next_filters = filters.clone();
+            next_filters.page += 1;
+            let mut cache = self.1.lock().unwrap();
+            cache.insert(next_filters.to_string(), next_token);
+        }
+
+        Ok(items
             .into_iter()
             .map(|item: YouTubeItem| match item {
                 YouTubeItem::Video(video) => SearchItem::Video(video_item_convert(video)),
