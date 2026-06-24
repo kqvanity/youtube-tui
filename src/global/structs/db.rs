@@ -106,10 +106,7 @@ impl DatabaseManager {
     pub fn unblock_playlist(id: &str) -> Result<()> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
         let conn = db.conn.lock().unwrap();
-        conn.execute(
-            "DELETE FROM blocked_playlists WHERE id = ?1",
-            params![id],
-        )?;
+        conn.execute("DELETE FROM blocked_playlists WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -118,14 +115,14 @@ impl DatabaseManager {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
         let conn = db.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT id FROM blocked_playlists")?;
-        
+
         let blocked = stmt.query_map([], |row| row.get(0))?;
-        
+
         let mut set = HashSet::new();
         for id in blocked {
             set.insert(id?);
         }
-        
+
         Ok(set)
     }
 }
