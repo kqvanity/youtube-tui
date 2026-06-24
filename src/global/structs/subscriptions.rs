@@ -12,8 +12,7 @@ use serde::*;
 use std::{
     error::Error,
     fmt::{Display, Formatter},
-    fs::{self, OpenOptions},
-    io::Write,
+    fs,
     sync::{atomic::AtomicU32, mpsc, Arc},
     thread,
 };
@@ -70,9 +69,6 @@ impl Subscriptions {
                     }
                     Ok((videos, channel)) => {
                         success.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        // cannot just compare video publish timestamp to sync timestamp
-                        // because publish timestamp is hugely inaccurate seen here
-                        // https://github.com/iv-org/invidious/issues/570
                         item.has_new = !videos.is_empty()
                             && (item.videos.is_empty() || videos[0].id != item.videos[0].id);
                         item.videos = videos;
@@ -142,6 +138,7 @@ impl Subscriptions {
                     last_sync: now,
                     last_sync_channel: now,
                     has_new: true,
+                    tags: Vec::new(),
                 })
             }
         }
@@ -156,6 +153,7 @@ impl Subscriptions {
     pub fn remove_one(&mut self, id: &str) -> bool {
         if let Some(i) = self.0.iter().position(|item| item.channel.id == id) {
             self.0.remove(i);
+            let _ = DatabaseManager::remove_subscription(id);
             return true;
         }
 
@@ -273,6 +271,8 @@ pub struct SubItem {
     pub last_sync: u64,
     pub last_sync_channel: u64,
     pub has_new: bool,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 impl Eq for SubItem {}
@@ -333,14 +333,9 @@ impl Collection<SubItem> for Subscriptions {
     }
 
     fn save(&self) -> Result<(), Box<dyn Error>> {
-        let mut file = OpenOptions::new()
-            .truncate(true)
-            .write(true)
-            .create(true)
-            .open(home_dir().unwrap().join(Self::INDEX_PATH))?;
-
-        let save_string = serde_json::to_string_pretty(self)?;
-        file.write_all(save_string.as_bytes())?;
+        for item in &self.0 {
+            DatabaseManager::upsert_subscription(item)?;
+        }
         Ok(())
     }
 
@@ -349,31 +344,47 @@ impl Collection<SubItem> for Subscriptions {
     }
 
     fn load() -> Self {
+        // Try to load from SQLite first
+        if let Ok(mut items) = DatabaseManager::get_all_subscriptions() {
+            if !items.is_empty() {
+                items.sort();
+                return Self(items);
+            }
+        }
+
+        // Fall back to JSON migration
         let path = home_dir().unwrap().join(Self::INDEX_PATH);
         let res = (|| -> Result<Self, Box<dyn Error>> {
             let file_string = fs::read_to_string(&path)?;
-            let deserialized = serde_json::from_str(&file_string)?;
+            let deserialized: Self = serde_json::from_str(&file_string)?;
             Ok(deserialized)
         })();
 
-        // if res is err, then the file either doesn't exist of has be altered incorrectly, in
-        // which case returns Self::default()
-        if let Ok(mut subs) = res {
-            subs.0.sort();
-            subs
-        } else {
-            // if the file does exist, back it up
-            // if it doesn't exist, it will throw an error but we dont care
-            let mut new_path = path.clone();
-            new_path.pop();
-            new_path.push(format!(
-                "{}.{}.old",
-                Self::INDEX_PATH,
-                chrono::offset::Local::now()
-            ));
-            let _ = fs::rename(&path, &new_path);
-
-            Self::default()
+        match res {
+            Ok(mut subs) => {
+                subs.0.sort();
+                // Migrate to SQLite
+                let _ = subs.save();
+                // Rename the old JSON file so we don't re-migrate next time
+                let mut migrated = path.clone();
+                migrated.set_extension("json.migrated");
+                let _ = fs::rename(&path, &migrated);
+                subs
+            }
+            Err(_) => {
+                // If JSON doesn't exist or is corrupt, back it up and start fresh
+                if path.exists() {
+                    let mut new_path = path.clone();
+                    new_path.pop();
+                    new_path.push(format!(
+                        "{}.{}.old",
+                        Self::INDEX_PATH,
+                        chrono::offset::Local::now()
+                    ));
+                    let _ = fs::rename(&path, &new_path);
+                }
+                Self::default()
+            }
         }
     }
 }

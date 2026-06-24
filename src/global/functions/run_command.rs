@@ -490,6 +490,144 @@ pub fn run_single_command(
                     .push(Task::RenderAll);
             }
         }
+        ["tag", identifier, tag] => {
+            let id = if identifier.len() == 24 {
+                identifier.to_string()
+            } else {
+                let splitted = identifier.split_once("/channel/");
+                match splitted {
+                    Some((_, actual_stuff)) if actual_stuff.len() >= 24 => {
+                        actual_stuff[0..24].to_string()
+                    }
+                    _ => {
+                        *framework.data.global.get_mut::<Message>().unwrap() =
+                            Message::Error(String::from("Invalid identifier: no channel ID found"));
+                        return;
+                    }
+                }
+            };
+
+            let message = match crate::global::structs::DatabaseManager::is_subscribed(&id) {
+                Ok(true) => {
+                    match crate::global::structs::DatabaseManager::tag_subscription(&id, tag) {
+                        Ok(()) => {
+                            // Keep in-memory SubItem in sync
+                            if let Some(item) = framework
+                                .data
+                                .global
+                                .get_mut::<Subscriptions>()
+                                .unwrap()
+                                .0
+                                .iter_mut()
+                                .find(|s| s.channel.id == id)
+                            {
+                                if !item.tags.contains(&tag.to_string()) {
+                                    item.tags.push(tag.to_string());
+                                }
+                            }
+                            Message::Success(format!("Tagged '{}' with '{}'", id, tag))
+                        }
+                        Err(e) => Message::Error(format!("Failed to tag subscription: {e}")),
+                    }
+                }
+                Ok(false) => Message::Error(String::from(
+                    "Channel is not subscribed — subscribe first with `sync <channel-id>`",
+                )),
+                Err(e) => Message::Error(format!("Database error: {e}")),
+            };
+
+            *framework.data.global.get_mut::<Message>().unwrap() = message;
+            framework
+                .data
+                .state
+                .get_mut::<Tasks>()
+                .unwrap()
+                .priority
+                .push(Task::RenderAll);
+        }
+        ["untag", identifier, tag] => {
+            let id = if identifier.len() == 24 {
+                identifier.to_string()
+            } else {
+                let splitted = identifier.split_once("/channel/");
+                match splitted {
+                    Some((_, actual_stuff)) if actual_stuff.len() >= 24 => {
+                        actual_stuff[0..24].to_string()
+                    }
+                    _ => {
+                        *framework.data.global.get_mut::<Message>().unwrap() =
+                            Message::Error(String::from("Invalid identifier: no channel ID found"));
+                        return;
+                    }
+                }
+            };
+
+            let message = match crate::global::structs::DatabaseManager::untag_subscription(&id, tag) {
+                Ok(true) => {
+                    // Keep in-memory SubItem in sync
+                    if let Some(item) = framework
+                        .data
+                        .global
+                        .get_mut::<Subscriptions>()
+                        .unwrap()
+                        .0
+                        .iter_mut()
+                        .find(|s| s.channel.id == id)
+                    {
+                        item.tags.retain(|t| t != tag);
+                    }
+                    Message::Success(format!("Removed tag '{}' from '{}'", tag, id))
+                }
+                Ok(false) => Message::Error(format!(
+                    "Tag '{}' not found on channel '{}'",
+                    tag, id
+                )),
+                Err(e) => Message::Error(format!("Failed to untag subscription: {e}")),
+            };
+
+            *framework.data.global.get_mut::<Message>().unwrap() = message;
+            framework
+                .data
+                .state
+                .get_mut::<Tasks>()
+                .unwrap()
+                .priority
+                .push(Task::RenderAll);
+        }
+        ["listtags", identifier] => {
+            let id = if identifier.len() == 24 {
+                identifier.to_string()
+            } else {
+                let splitted = identifier.split_once("/channel/");
+                match splitted {
+                    Some((_, actual_stuff)) if actual_stuff.len() >= 24 => {
+                        actual_stuff[0..24].to_string()
+                    }
+                    _ => {
+                        *framework.data.global.get_mut::<Message>().unwrap() =
+                            Message::Error(String::from("Invalid identifier: no channel ID found"));
+                        return;
+                    }
+                }
+            };
+
+            let message = match crate::global::structs::DatabaseManager::get_tags_for(&id) {
+                Ok(tags) if tags.is_empty() => {
+                    Message::Message(format!("Channel '{}' has no tags", id))
+                }
+                Ok(tags) => Message::Message(format!("Tags for '{}': {}", id, tags.join(", "))),
+                Err(e) => Message::Error(format!("Failed to get tags: {e}")),
+            };
+
+            *framework.data.global.get_mut::<Message>().unwrap() = message;
+            framework
+                .data
+                .state
+                .get_mut::<Tasks>()
+                .unwrap()
+                .priority
+                .push(Task::RenderAll);
+        }
         ["block", identifier] => {
             let id = if identifier.len() == 24 {
                 identifier.to_string()
