@@ -170,9 +170,16 @@ impl DatabaseManager {
         let videos_json = serde_json::to_string(&item.videos)
             .unwrap_or_else(|_| "[]".to_string());
         conn.execute(
-            "INSERT OR REPLACE INTO subscriptions
+            "INSERT INTO subscriptions 
                 (channel_id, name, thumbnail_url, last_sync, last_sync_channel, has_new, videos_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(channel_id) DO UPDATE SET
+                name = excluded.name,
+                thumbnail_url = excluded.thumbnail_url,
+                last_sync = excluded.last_sync,
+                last_sync_channel = excluded.last_sync_channel,
+                has_new = excluded.has_new,
+                videos_json = excluded.videos_json",
             params![
                 item.channel.id,
                 item.channel.name,
