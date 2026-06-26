@@ -497,9 +497,16 @@ pub fn run_single_command(
                 .or_else(|_| env::var("id"))
                 .unwrap_or_default();
             if id.is_empty() || id == "invalid" {
-                *framework.data.global.get_mut::<Message>().unwrap() =
-                    Message::Error(String::from("No channel in context — hover over a channel first"));
-                framework.data.state.get_mut::<Tasks>().unwrap().priority.push(Task::RenderAll);
+                *framework.data.global.get_mut::<Message>().unwrap() = Message::Error(
+                    String::from("No channel in context — hover over a channel first"),
+                );
+                framework
+                    .data
+                    .state
+                    .get_mut::<Tasks>()
+                    .unwrap()
+                    .priority
+                    .push(Task::RenderAll);
                 return;
             }
             run_single_command(&["tag", &id, tag], framework, terminal);
@@ -509,9 +516,16 @@ pub fn run_single_command(
                 .or_else(|_| env::var("id"))
                 .unwrap_or_default();
             if id.is_empty() || id == "invalid" {
-                *framework.data.global.get_mut::<Message>().unwrap() =
-                    Message::Error(String::from("No channel in context — hover over a channel first"));
-                framework.data.state.get_mut::<Tasks>().unwrap().priority.push(Task::RenderAll);
+                *framework.data.global.get_mut::<Message>().unwrap() = Message::Error(
+                    String::from("No channel in context — hover over a channel first"),
+                );
+                framework
+                    .data
+                    .state
+                    .get_mut::<Tasks>()
+                    .unwrap()
+                    .priority
+                    .push(Task::RenderAll);
                 return;
             }
             run_single_command(&["untag", &id, tag], framework, terminal);
@@ -521,9 +535,16 @@ pub fn run_single_command(
                 .or_else(|_| env::var("id"))
                 .unwrap_or_default();
             if id.is_empty() || id == "invalid" {
-                *framework.data.global.get_mut::<Message>().unwrap() =
-                    Message::Error(String::from("No channel in context — hover over a channel first"));
-                framework.data.state.get_mut::<Tasks>().unwrap().priority.push(Task::RenderAll);
+                *framework.data.global.get_mut::<Message>().unwrap() = Message::Error(
+                    String::from("No channel in context — hover over a channel first"),
+                );
+                framework
+                    .data
+                    .state
+                    .get_mut::<Tasks>()
+                    .unwrap()
+                    .priority
+                    .push(Task::RenderAll);
                 return;
             }
             run_single_command(&["toggletag", &id, tag], framework, terminal);
@@ -533,9 +554,16 @@ pub fn run_single_command(
                 .or_else(|_| env::var("id"))
                 .unwrap_or_default();
             if id.is_empty() || id == "invalid" {
-                *framework.data.global.get_mut::<Message>().unwrap() =
-                    Message::Error(String::from("No channel in context — hover over a channel first"));
-                framework.data.state.get_mut::<Tasks>().unwrap().priority.push(Task::RenderAll);
+                *framework.data.global.get_mut::<Message>().unwrap() = Message::Error(
+                    String::from("No channel in context — hover over a channel first"),
+                );
+                framework
+                    .data
+                    .state
+                    .get_mut::<Tasks>()
+                    .unwrap()
+                    .priority
+                    .push(Task::RenderAll);
                 return;
             }
             run_single_command(&["listtags", &id], framework, terminal);
@@ -612,28 +640,28 @@ pub fn run_single_command(
                 }
             };
 
-            let message = match crate::global::structs::DatabaseManager::untag_subscription(&id, tag) {
-                Ok(true) => {
-                    // Keep in-memory SubItem in sync
-                    if let Some(item) = framework
-                        .data
-                        .global
-                        .get_mut::<Subscriptions>()
-                        .unwrap()
-                        .0
-                        .iter_mut()
-                        .find(|s| s.channel.id == id)
-                    {
-                        item.tags.retain(|t| t != tag);
+            let message =
+                match crate::global::structs::DatabaseManager::untag_subscription(&id, tag) {
+                    Ok(true) => {
+                        // Keep in-memory SubItem in sync
+                        if let Some(item) = framework
+                            .data
+                            .global
+                            .get_mut::<Subscriptions>()
+                            .unwrap()
+                            .0
+                            .iter_mut()
+                            .find(|s| s.channel.id == id)
+                        {
+                            item.tags.retain(|t| t != tag);
+                        }
+                        Message::Success(format!("Removed tag '{}' from '{}'", tag, id))
                     }
-                    Message::Success(format!("Removed tag '{}' from '{}'", tag, id))
-                }
-                Ok(false) => Message::Error(format!(
-                    "Tag '{}' not found on channel '{}'",
-                    tag, id
-                )),
-                Err(e) => Message::Error(format!("Failed to untag subscription: {e}")),
-            };
+                    Ok(false) => {
+                        Message::Error(format!("Tag '{}' not found on channel '{}'", tag, id))
+                    }
+                    Err(e) => Message::Error(format!("Failed to untag subscription: {e}")),
+                };
 
             *framework.data.global.get_mut::<Message>().unwrap() = message;
             framework
@@ -832,15 +860,15 @@ pub fn run_single_command(
                     Some((_, actual_stuff)) if actual_stuff.len() >= 34 => {
                         actual_stuff[0..34].to_string()
                     }
-                    _ => identifier.to_string() 
+                    _ => identifier.to_string(),
                 }
             };
-            
+
             let message = match crate::global::structs::DatabaseManager::block_playlist(&id) {
                 Ok(_) => Message::Success(String::from("Playlist blocked successfully")),
                 Err(e) => Message::Error(format!("Failed to block playlist: {e}")),
             };
-            
+
             let status = framework.data.global.get_mut::<Status>().unwrap();
             status.saved_list_state = status.last_list_state;
 
@@ -858,15 +886,15 @@ pub fn run_single_command(
                     Some((_, actual_stuff)) if actual_stuff.len() >= 34 => {
                         actual_stuff[0..34].to_string()
                     }
-                    _ => identifier.to_string()
+                    _ => identifier.to_string(),
                 }
             };
-            
+
             let message = match crate::global::structs::DatabaseManager::unblock_playlist(&id) {
                 Ok(_) => Message::Success(String::from("Playlist unblocked successfully")),
                 Err(e) => Message::Error(format!("Failed to unblock playlist: {e}")),
             };
-            
+
             let status = framework.data.global.get_mut::<Status>().unwrap();
             status.saved_list_state = status.last_list_state;
 

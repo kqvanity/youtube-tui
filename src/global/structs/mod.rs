@@ -1,4 +1,5 @@
 //! enums and structs
+mod db;
 mod errors;
 mod history;
 mod item;
@@ -13,10 +14,10 @@ mod state_env;
 mod status;
 mod subscriptions;
 mod tasks;
-mod db;
 
 mod providers;
 
+pub use db::*;
 pub use errors::*;
 pub use history::*;
 pub use item::*;
@@ -35,4 +36,3 @@ pub use state_env::*;
 pub use status::*;
 pub use subscriptions::*;
 pub use tasks::*;
-pub use db::*;

@@ -222,7 +222,11 @@ impl FrameworkItem for ItemInfo {
                         format!(
                             "{} video{}",
                             minichannel.video_count,
-                            if minichannel.video_count <= 1 { "" } else { "s" }
+                            if minichannel.video_count <= 1 {
+                                ""
+                            } else {
+                                "s"
+                            }
                         ),
                         Style::default().fg(appearance.colors.item_info.video_count),
                     ),

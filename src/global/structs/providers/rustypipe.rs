@@ -17,8 +17,8 @@ use crate::{
     RUNTIME,
 };
 
-use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
 pub struct RustyPipeWrapper(RustyPipe, Arc<Mutex<HashMap<String, String>>>);
@@ -268,7 +268,15 @@ impl SearchProviderTrait for RustyPipeWrapper {
 
             for _ in 1..chunk_size {
                 if let Some(token) = current_token {
-                    let paginator = RUNTIME.get().unwrap().block_on(self.0.query().continuation(token, rustypipe::model::paginator::ContinuationEndpoint::Search, None))?;
+                    let paginator =
+                        RUNTIME
+                            .get()
+                            .unwrap()
+                            .block_on(self.0.query().continuation(
+                                token,
+                                rustypipe::model::paginator::ContinuationEndpoint::Search,
+                                None,
+                            ))?;
                     results.extend(paginator.items);
                     current_token = paginator.ctoken;
                 } else {
@@ -283,7 +291,15 @@ impl SearchProviderTrait for RustyPipeWrapper {
 
             if let Some(mut token) = token_opt {
                 for _ in 0..chunk_size {
-                    let paginator = RUNTIME.get().unwrap().block_on(self.0.query().continuation(token, rustypipe::model::paginator::ContinuationEndpoint::Search, None))?;
+                    let paginator =
+                        RUNTIME
+                            .get()
+                            .unwrap()
+                            .block_on(self.0.query().continuation(
+                                token,
+                                rustypipe::model::paginator::ContinuationEndpoint::Search,
+                                None,
+                            ))?;
                     results.extend(paginator.items);
                     if let Some(next_tok) = paginator.ctoken {
                         token = next_tok;

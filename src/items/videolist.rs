@@ -27,11 +27,7 @@ pub struct VideoList {
     pub selector: TextList,
     pub display: ItemInfo,
     pub grid: Grid,
-    /// stores the latest known `self.selector.selected`
-    /// this allows for the item to "remember" its previous items after refreshes
-    /// if it is reset to 0 after refreshes, is can be displaying different stuff from channelist
-    pub previous: usize,
-    /// current channel id, is None if channellist is on `all feeds`
+    pub previous: super::channellist::VideoFilter,
     pub channel_id: Option<String>,
 }
 
@@ -46,7 +42,7 @@ impl Default for VideoList {
                 vec![Constraint::Percentage(100)],
             )
             .unwrap(),
-            previous: 0,
+            previous: super::channellist::VideoFilter::All,
             channel_id: None,
         }
     }
@@ -76,20 +72,37 @@ impl VideoList {
         }
     }
 
-    fn update_items(&mut self, subscriptions: &Subscriptions, subselect: usize) {
-        self.previous = subselect;
-        if subselect == 0 {
-            // if channellist is at index 0 (first item), then fetch all feeds
-            self.channel_id = None;
-            self.items = subscriptions.get_all_videos();
-        } else if subselect <= subscriptions.0.len() {
-            // or else, only fetch the one channel
-            self.channel_id = Some(subscriptions.0[subselect - 1].channel.id.clone());
-            self.items = subscriptions.0[subselect - 1].videos.clone();
-        } else {
-            // no idea when will this be true, just here to prevent some errors.
-            self.channel_id = None;
-            self.items.clear();
+    fn update_items(
+        &mut self,
+        subscriptions: &Subscriptions,
+        filter: super::channellist::VideoFilter,
+    ) {
+        self.previous = filter.clone();
+        match filter {
+            super::channellist::VideoFilter::All => {
+                self.channel_id = None;
+                self.items = subscriptions.get_all_videos();
+            }
+            super::channellist::VideoFilter::Tag(tag) => {
+                self.channel_id = None;
+
+                let mut vids = Vec::new();
+                for item in &subscriptions.0 {
+                    if (tag.is_empty() && item.tags.is_empty()) || item.tags.contains(&tag) {
+                        vids.extend(item.videos.clone());
+                    }
+                }
+                vids.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+                self.items = vids;
+            }
+            super::channellist::VideoFilter::Channel(id) => {
+                self.channel_id = Some(id.clone());
+                if let Some(sub) = subscriptions.0.iter().find(|s| s.channel.id == id) {
+                    self.items = sub.videos.clone();
+                } else {
+                    self.items.clear();
+                }
+            }
         }
     }
 
@@ -261,18 +274,19 @@ impl FrameworkItem for VideoList {
         self.grid.set_border_type(appearance.borders);
         self.selector.set_border_type(appearance.borders);
 
+        let filter = framework
+            .data
+            .global
+            .get::<Status>()
+            .unwrap()
+            .storage
+            .get::<SubSelect>()
+            .map(|s| s.0.clone())
+            .unwrap_or_else(|| self.previous.clone());
         // put the items into self.items
         self.update_items(
             framework.data.global.get::<Subscriptions>().unwrap(),
-            framework
-                .data
-                .global
-                .get::<Status>()
-                .unwrap()
-                .storage
-                .get::<SubSelect>()
-                .unwrap_or(&SubSelect(self.previous))
-                .0,
+            filter,
         );
         // update textlist to display the items in self.items
         self.selector
@@ -315,7 +329,7 @@ impl FrameworkItem for VideoList {
         {
             self.update_items(
                 framework.data.global.get::<Subscriptions>().unwrap(),
-                subselect.0,
+                subselect.0.clone(),
             );
             framework
                 .data

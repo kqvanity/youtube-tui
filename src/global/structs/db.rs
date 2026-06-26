@@ -167,8 +167,7 @@ impl DatabaseManager {
     pub fn upsert_subscription(item: &crate::global::structs::SubItem) -> Result<()> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
         let conn = db.conn.lock().unwrap();
-        let videos_json = serde_json::to_string(&item.videos)
-            .unwrap_or_else(|_| "[]".to_string());
+        let videos_json = serde_json::to_string(&item.videos).unwrap_or_else(|_| "[]".to_string());
         conn.execute(
             "INSERT INTO subscriptions 
                 (channel_id, name, thumbnail_url, last_sync, last_sync_channel, has_new, videos_json)
@@ -208,8 +207,7 @@ impl DatabaseManager {
     pub fn is_subscribed(channel_id: &str) -> Result<bool> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
         let conn = db.conn.lock().unwrap();
-        let mut stmt =
-            conn.prepare("SELECT 1 FROM subscriptions WHERE channel_id = ?1")?;
+        let mut stmt = conn.prepare("SELECT 1 FROM subscriptions WHERE channel_id = ?1")?;
         stmt.exists(params![channel_id])
     }
 
@@ -327,9 +325,8 @@ impl DatabaseManager {
     pub fn get_tags_for(channel_id: &str) -> Result<Vec<String>> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
         let conn = db.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT tag FROM subscription_tags WHERE channel_id = ?1 ORDER BY tag",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT tag FROM subscription_tags WHERE channel_id = ?1 ORDER BY tag")?;
         let tags = stmt
             .query_map(params![channel_id], |row| row.get(0))?
             .collect::<Result<Vec<_>>>()?;
@@ -337,9 +334,7 @@ impl DatabaseManager {
     }
 
     /// Get all subscriptions that have a specific tag.
-    pub fn get_subscriptions_by_tag(
-        tag: &str,
-    ) -> Result<Vec<crate::global::structs::SubItem>> {
+    pub fn get_subscriptions_by_tag(tag: &str) -> Result<Vec<crate::global::structs::SubItem>> {
         let all = Self::get_all_subscriptions()?;
         Ok(all
             .into_iter()

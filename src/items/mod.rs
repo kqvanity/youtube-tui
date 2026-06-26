@@ -17,7 +17,7 @@ mod channeldisplay;
 pub use channeldisplay::*;
 mod channellist;
 pub use channellist::*;
-mod videolist;
 pub mod filter;
+mod videolist;
 
 pub use videolist::*;

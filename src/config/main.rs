@@ -1,8 +1,8 @@
+use crate::config::serde::ColorVariantSerde::Black;
 use crate::global::traits::{ConfigTrait, SearchProviderTrait};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use typemap::Key;
-use crate::config::serde::ColorVariantSerde::Black;
 
 /// `main.yml`, the main config file
 #[derive(Serialize, Deserialize, Clone)]
@@ -53,15 +53,19 @@ pub struct BlockList {
     #[serde(default = "block_keywords")]
     pub keywords: Vec<String>,
     #[serde(default = "block_channels")]
-    pub channels: Vec<String>
+    pub channels: Vec<String>,
 }
 
-const fn block_keywords() -> Vec<String> { return vec![] }
-const fn block_channels() -> Vec<String> { return vec![] }
+const fn block_keywords() -> Vec<String> {
+    return vec![];
+}
+const fn block_channels() -> Vec<String> {
+    return vec![];
+}
 const fn blacklist() -> BlockList {
     BlockList {
         channels: block_channels(),
-        keywords: block_keywords()
+        keywords: block_keywords(),
     }
 }
 

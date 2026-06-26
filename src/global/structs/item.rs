@@ -1,3 +1,5 @@
+use super::Errors;
+use crate::config::BlockList;
 use crate::global::common::{
     channel::Channel, hidden::*, universal::Playlist as FullPlaylist, video::Video, CommonChannel,
     CommonPlaylist, CommonVideo,
@@ -5,8 +7,6 @@ use crate::global::common::{
 use crate::global::{functions::*, traits::CollectionItem};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
-use crate::config::BlockList;
-use super::Errors;
 
 /// Items are things like a single video/playlist and channel
 // they are displayed by the item info widget in `iteminfo.rs`

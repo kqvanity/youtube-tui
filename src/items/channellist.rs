@@ -1,7 +1,6 @@
 use ratatui::{
     layout::{Constraint, Rect},
     style::Style,
-    widgets::Paragraph,
 };
 use tui_additions::{
     framework::{FrameworkClean, FrameworkItem},
@@ -16,25 +15,36 @@ use crate::{
 
 use super::{ItemInfo, VidSelect};
 
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum ActivePane {
+    #[default]
+    Tags,
+    Channels,
+}
+
 #[derive(Clone)]
 pub struct ChannelList {
-    pub selector: TextList,
-    pub channel_display: ItemInfo,
-    pub grid: Grid,
+    pub tags_selector: TextList,
+    pub channels_selector: TextList,
+    pub tags: Vec<String>,
     pub channels: Vec<FullChannelItem>,
+    pub grid: Grid,
+    pub active_pane: ActivePane,
 }
 
 impl Default for ChannelList {
     fn default() -> Self {
         Self {
-            selector: TextList::default(),
-            channel_display: ItemInfo::default(),
+            tags_selector: TextList::default(),
+            channels_selector: TextList::default(),
+            tags: Vec::new(),
+            channels: Vec::new(),
             grid: Grid::new(
                 vec![Constraint::Percentage(30), Constraint::Percentage(70)],
                 vec![Constraint::Percentage(100)],
             )
             .unwrap(),
-            channels: Vec::new(),
+            active_pane: ActivePane::Tags,
         }
     }
 }
@@ -45,63 +55,193 @@ impl ChannelList {
         info: &tui_additions::framework::ItemInfo,
         appearance: &AppearanceConfig,
     ) {
+        let default_style = Style::default().fg(appearance.colors.outline);
+        let hover_style = Style::default().fg(appearance.colors.outline_hover);
+        let selected_style = Style::default().fg(appearance.colors.outline_selected);
+        let secondary_style = Style::default().fg(appearance.colors.outline_secondary);
+
         if info.selected {
-            self.grid
-                .set_border_style(Style::default().fg(appearance.colors.outline_selected));
-            self.selector
-                .set_cursor_style(Style::default().fg(appearance.colors.outline_hover));
+            self.grid.set_border_style(selected_style);
+            self.tags_selector
+                .set_cursor_style(if self.active_pane == ActivePane::Tags {
+                    hover_style
+                } else {
+                    secondary_style
+                });
+            self.channels_selector
+                .set_cursor_style(if self.active_pane == ActivePane::Channels {
+                    hover_style
+                } else {
+                    secondary_style
+                });
         } else if info.hover {
-            self.grid
-                .set_border_style(Style::default().fg(appearance.colors.outline_hover));
-            self.selector
-                .set_cursor_style(Style::default().fg(appearance.colors.outline_secondary));
+            self.grid.set_border_style(hover_style);
+            self.tags_selector.set_cursor_style(secondary_style);
+            self.channels_selector.set_cursor_style(secondary_style);
         } else {
-            self.grid
-                .set_border_style(Style::default().fg(appearance.colors.outline));
-            self.selector
-                .set_cursor_style(Style::default().fg(appearance.colors.outline));
+            self.grid.set_border_style(default_style);
+            self.tags_selector.set_cursor_style(default_style);
+            self.channels_selector.set_cursor_style(default_style);
         }
     }
 
-    fn select_at_cursor(&mut self, framework: &mut FrameworkClean) {
-        let tasks = framework.data.state.get_mut::<Tasks>().unwrap();
+    fn update_lists(&mut self, subscriptions: &Subscriptions) {
+        let mut tags: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut has_untagged = false;
 
-        if self.selector.selected >= self.selector.items.len() {
-            self.selector.last().unwrap();
-            tasks.priority.push(Task::RenderAll);
+        for item in &subscriptions.0 {
+            if item.tags.is_empty() {
+                has_untagged = true;
+            } else {
+                for tag in &item.tags {
+                    tags.insert(tag.clone());
+                }
+            }
+        }
+
+        self.tags = tags.into_iter().collect();
+        self.tags.sort();
+
+        let mut tag_items = vec!["All subscriptions".to_string()];
+        if has_untagged {
+            tag_items.push("Untagged".to_string());
+        }
+        tag_items.extend(self.tags.iter().map(|t| t.clone()));
+
+        self.tags_selector.set_items(&tag_items).unwrap();
+        self.update_channels_pane(subscriptions);
+    }
+
+    fn update_channels_pane(&mut self, subscriptions: &Subscriptions) {
+        let selected_tag_idx = self.tags_selector.selected;
+        let mut filtered_channels = Vec::new();
+
+        if selected_tag_idx == 0 {
+            filtered_channels = subscriptions.0.iter().map(|s| s.channel.clone()).collect();
+        } else {
+            let has_untagged = subscriptions.0.iter().any(|s| s.tags.is_empty());
+            let is_untagged_idx = selected_tag_idx == 1 && has_untagged;
+
+            if is_untagged_idx {
+                filtered_channels = subscriptions
+                    .0
+                    .iter()
+                    .filter(|s| s.tags.is_empty())
+                    .map(|s| s.channel.clone())
+                    .collect();
+            } else {
+                let actual_tag_idx = if has_untagged {
+                    selected_tag_idx - 2
+                } else {
+                    selected_tag_idx - 1
+                };
+                if let Some(tag) = self.tags.get(actual_tag_idx) {
+                    filtered_channels = subscriptions
+                        .0
+                        .iter()
+                        .filter(|s| s.tags.contains(tag))
+                        .map(|s| s.channel.clone())
+                        .collect();
+                }
+            }
+        }
+
+        self.channels = filtered_channels;
+
+        let mut channel_items = vec![];
+        if selected_tag_idx == 0 {
+            channel_items.push("All channels".to_string());
+        } else {
+            let has_untagged = subscriptions.0.iter().any(|s| s.tags.is_empty());
+            let is_untagged_idx = selected_tag_idx == 1 && has_untagged;
+            if is_untagged_idx {
+                channel_items.push("All untagged channels".to_string());
+            } else {
+                let actual_tag_idx = if has_untagged {
+                    selected_tag_idx - 2
+                } else {
+                    selected_tag_idx - 1
+                };
+                let tag_name = self
+                    .tags
+                    .get(actual_tag_idx)
+                    .unwrap_or(&String::new())
+                    .clone();
+                channel_items.push(format!("All '{}' channels", tag_name));
+            }
+        }
+
+        channel_items.extend(self.channels.iter().map(|c| c.name.clone()));
+        self.channels_selector.set_items(&channel_items).unwrap();
+
+        if self.channels_selector.selected >= channel_items.len() {
+            self.channels_selector.selected = 0;
+            self.channels_selector.scroll = 0;
         }
     }
 
-    fn update_unread(&mut self, subscriptions: &Subscriptions) {
-        self.selector
-            .set_items(
-                &[format!(
-                    "All subscriptions{}",
-                    if !subscriptions.0.is_empty()
-                        && subscriptions.0.iter().any(|item| item.has_new)
-                    {
-                        "*"
-                    } else {
-                        ""
-                    }
-                )]
-                .into_iter()
-                .chain(
-                    subscriptions.0.iter().map(|subtiem| {
-                        format!("{subtiem}{}", if subtiem.has_new { "*" } else { "" })
-                    }),
-                )
-                .collect::<Vec<_>>(),
-            )
-            .unwrap();
+    fn emit_filter(&mut self, framework: &mut FrameworkClean) {
+        let subscriptions = framework.data.global.get::<Subscriptions>().unwrap();
+        let selected_tag_idx = self.tags_selector.selected;
+        let selected_channel_idx = self.channels_selector.selected;
+
+        let filter = if selected_tag_idx == 0 {
+            if selected_channel_idx == 0 {
+                VideoFilter::All
+            } else if let Some(channel) = self.channels.get(selected_channel_idx - 1) {
+                VideoFilter::Channel(channel.id.clone())
+            } else {
+                VideoFilter::All
+            }
+        } else {
+            let has_untagged = subscriptions.0.iter().any(|s| s.tags.is_empty());
+            let is_untagged_idx = selected_tag_idx == 1 && has_untagged;
+            let actual_tag_idx = if has_untagged {
+                selected_tag_idx - 2
+            } else {
+                selected_tag_idx - 1
+            };
+
+            if selected_channel_idx == 0 {
+                if is_untagged_idx {
+                    VideoFilter::Tag("".to_string())
+                } else if let Some(tag) = self.tags.get(actual_tag_idx) {
+                    VideoFilter::Tag(tag.clone())
+                } else {
+                    VideoFilter::All
+                }
+            } else if let Some(channel) = self.channels.get(selected_channel_idx - 1) {
+                VideoFilter::Channel(channel.id.clone())
+            } else {
+                VideoFilter::All
+            }
+        };
+
+        framework
+            .data
+            .global
+            .get_mut::<Status>()
+            .unwrap()
+            .storage
+            .insert::<SubSelect>(SubSelect(filter));
+        framework
+            .data
+            .global
+            .get_mut::<Status>()
+            .unwrap()
+            .render_image = true;
     }
 
     fn set_env(&self, framework: &mut FrameworkClean) {
-        let id = if let Some(item) = &self.channel_display.item {
-            item.id().unwrap().to_string()
+        let selected_channel_idx = self.channels_selector.selected;
+        let id = if selected_channel_idx == 0 {
+            "invalid".to_string()
+        } else if let Some(channel) = self.channels.get(selected_channel_idx - 1) {
+            channel.id.clone()
         } else {
             "invalid".to_string()
         };
+
         let mainconfig = framework.data.global.get::<MainConfig>().unwrap();
         set_envs(
             [
@@ -121,55 +261,6 @@ impl ChannelList {
             &mut framework.data.state.get_mut::<StateEnvs>().unwrap().0,
         )
     }
-
-    fn update_channel_item(&mut self, framework: &mut FrameworkClean) {
-        if self.selector.selected == 0 {
-            self.channel_display.item = None;
-            framework
-                .data
-                .state
-                .get_mut::<Tasks>()
-                .unwrap()
-                .priority
-                .push(Task::ClearPage);
-        } else {
-            if framework.data.state.get::<VidSelect>().unwrap().0 {
-                framework
-                    .data
-                    .state
-                    .get_mut::<Tasks>()
-                    .unwrap()
-                    .priority
-                    .push(Task::ClearPage);
-            }
-            self.channel_display.item = self
-                .channels
-                .get(self.selector.selected - 1)
-                .map(|channel| Item::FullChannel(channel.clone()));
-            let subscriptions = framework.data.global.get_mut::<Subscriptions>().unwrap();
-            let item = subscriptions.0.get_mut(self.selector.selected - 1);
-            let mut found = false;
-            match item {
-                Some(item) if item.channel.id == self.channels[self.selector.selected - 1].id => {
-                    if item.has_new {
-                        item.has_new = false;
-                        found = true;
-                    }
-                }
-                _ => subscriptions.0.iter_mut().for_each(|item| {
-                    if item.channel.id == self.channels[self.selector.selected - 1].id {
-                        found = true;
-                        item.has_new = false;
-                    }
-                }),
-            }
-
-            if found {
-                self.update_unread(subscriptions);
-            }
-            self.set_env(framework);
-        }
-    }
 }
 
 impl FrameworkItem for ChannelList {
@@ -181,17 +272,12 @@ impl FrameworkItem for ChannelList {
         let appearance = framework.data.global.get::<AppearanceConfig>().unwrap();
 
         let subscriptions = framework.data.global.get::<Subscriptions>().unwrap();
-        self.selector.set_border_type(appearance.borders);
+        self.tags_selector.set_border_type(appearance.borders);
+        self.channels_selector.set_border_type(appearance.borders);
         self.grid.set_border_type(appearance.borders);
-        self.channels = subscriptions.get_channels();
 
-        self.update_unread(subscriptions);
-
-        if self.selector.selected >= self.selector.items.len() {
-            self.selector.last()?;
-        }
-
-        self.update_channel_item(framework);
+        self.update_lists(subscriptions);
+        self.emit_filter(framework);
 
         Ok(())
     }
@@ -213,52 +299,11 @@ impl FrameworkItem for ChannelList {
         self.update_appearance(&info, appearance);
         let chunks = self.grid.chunks(area).unwrap()[0].clone();
         frame.render_widget(self.grid.clone(), area);
-        self.selector.set_height(chunks[1].height);
-        frame.render_widget(self.selector.clone(), chunks[1]);
+        self.tags_selector.set_height(chunks[0].height);
+        self.channels_selector.set_height(chunks[1].height);
 
-        if self.selector.items.len() == 1 {
-            frame.render_widget(
-                Paragraph::new("Subscribe to some channels first, come back later.\n\n- Docs at tui.siri.ws/youtube\n- Follow me on GitHub! (@Siriusmart)").wrap(ratatui::widgets::Wrap { trim: true }),
-                chunks[0],
-            );
-            return;
-        }
-        if self.selector.selected == 0 {
-            let now = chrono::Utc::now().timestamp() as u64;
-            let subscriptions = framework.data.global.get_mut::<Subscriptions>().unwrap();
-            let paragraph = subscriptions
-                .0
-                .iter()
-                .map(|item| {
-                    format!(
-                        "  {} (last synced {} day{} ago){}",
-                        item.channel.name,
-                        (now - item.last_sync) / 86400,
-                        if now - item.last_sync > 172800 {
-                            "s"
-                        } else {
-                            ""
-                        },
-                        if item.has_new { "*" } else { "" }
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            frame.render_widget(
-                Paragraph::new(format!("Subscriptions (last sync):\n\n{paragraph}")),
-                chunks[0],
-            );
-            return;
-        }
-        if self.channel_display.item.is_none() {
-            frame.render_widget(
-                Paragraph::new("Nothing to see here\n\nMaybe try something else"),
-                chunks[0],
-            );
-            return;
-        }
-        self.channel_display
-            .render(frame, framework, chunks[0], popup_render, info);
+        frame.render_widget(self.tags_selector.clone(), chunks[0]);
+        frame.render_widget(self.channels_selector.clone(), chunks[1]);
     }
 
     fn message(
@@ -270,27 +315,40 @@ impl FrameworkItem for ChannelList {
             return false;
         }
 
+        let old_tag_idx = self.tags_selector.selected;
+        let old_channel_idx = self.channels_selector.selected;
+
         let updated = data.get("type").is_some_and(|v| {
             v.downcast_ref::<String>()
                 .is_some_and(|v| match v.as_str() {
-                    "scrollup" => self.selector.up().is_ok(),
-                    "scrolldown" => self.selector.down().is_ok(),
+                    "scrollup" => {
+                        if self.active_pane == ActivePane::Tags {
+                            self.tags_selector.up().is_ok()
+                        } else {
+                            self.channels_selector.up().is_ok()
+                        }
+                    }
+                    "scrolldown" => {
+                        if self.active_pane == ActivePane::Tags {
+                            self.tags_selector.down().is_ok()
+                        } else {
+                            self.channels_selector.down().is_ok()
+                        }
+                    }
                     _ => false,
                 })
         });
 
         if updated {
-            framework
-                .data
-                .global
-                .get_mut::<Status>()
-                .unwrap()
-                .storage
-                .insert::<SubSelect>(SubSelect(self.selector.selected));
-
-            self.update_channel_item(framework);
-            self.update(framework);
-            self.set_env(framework);
+            let mut changed = false;
+            if self.tags_selector.selected != old_tag_idx {
+                let subscriptions = framework.data.global.get::<Subscriptions>().unwrap();
+                self.update_channels_pane(subscriptions);
+                changed = true;
+            }
+            if self.channels_selector.selected != old_channel_idx || changed {
+                self.emit_filter(framework);
+            }
 
             framework
                 .data
@@ -310,7 +368,8 @@ impl FrameworkItem for ChannelList {
         _info: tui_additions::framework::ItemInfo,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let tasks = framework.data.state.get_mut::<Tasks>().unwrap();
-        let previously_selected = self.selector.selected;
+        let old_tag_idx = self.tags_selector.selected;
+        let old_channel_idx = self.channels_selector.selected;
 
         let action = if let Some(action) = framework
             .data
@@ -323,70 +382,75 @@ impl FrameworkItem for ChannelList {
         } else {
             return Ok(());
         };
+
         match action {
-            KeyAction::MoveDown if self.selector.down().is_ok() => {
-                tasks.priority.push(Task::RenderAll)
-            }
-            KeyAction::MoveUp if self.selector.up().is_ok() => tasks.priority.push(Task::RenderAll),
-            KeyAction::MoveLeft | KeyAction::First => {
-                if self.selector.first().is_ok() {
+            KeyAction::MoveDown => {
+                if self.active_pane == ActivePane::Tags {
+                    if self.tags_selector.down().is_ok() {
+                        tasks.priority.push(Task::RenderAll)
+                    }
+                } else if self.channels_selector.down().is_ok() {
                     tasks.priority.push(Task::RenderAll)
                 }
             }
-            KeyAction::MoveRight | KeyAction::End => {
-                if self.selector.last().is_ok() {
+            KeyAction::MoveUp => {
+                if self.active_pane == ActivePane::Tags {
+                    if self.tags_selector.up().is_ok() {
+                        tasks.priority.push(Task::RenderAll)
+                    }
+                } else if self.channels_selector.up().is_ok() {
+                    tasks.priority.push(Task::RenderAll)
+                }
+            }
+            KeyAction::MoveLeft => {
+                if self.active_pane == ActivePane::Channels {
+                    self.active_pane = ActivePane::Tags;
+                    tasks.priority.push(Task::RenderAll);
+                }
+            }
+            KeyAction::MoveRight => {
+                if self.active_pane == ActivePane::Tags {
+                    self.active_pane = ActivePane::Channels;
+                    tasks.priority.push(Task::RenderAll);
+                }
+            }
+            KeyAction::First => {
+                if self.active_pane == ActivePane::Tags {
+                    if self.tags_selector.first().is_ok() {
+                        tasks.priority.push(Task::RenderAll)
+                    }
+                } else if self.channels_selector.first().is_ok() {
+                    tasks.priority.push(Task::RenderAll)
+                }
+            }
+            KeyAction::End => {
+                if self.active_pane == ActivePane::Tags {
+                    if self.tags_selector.last().is_ok() {
+                        tasks.priority.push(Task::RenderAll)
+                    }
+                } else if self.channels_selector.last().is_ok() {
                     tasks.priority.push(Task::RenderAll)
                 }
             }
             KeyAction::Select => {
-                self.select_at_cursor(framework);
                 return Ok(());
             }
             _ => return Ok(()),
         }
 
-        if self.selector.selected != previously_selected {
-            framework
-                .data
-                .global
-                .get_mut::<Status>()
-                .unwrap()
-                .storage
-                .insert::<SubSelect>(SubSelect(self.selector.selected));
+        let mut changed = false;
 
-            self.update_channel_item(framework);
-
-            framework
-                .data
-                .global
-                .get_mut::<Status>()
-                .unwrap()
-                .render_image = true;
-
-            return Ok(());
+        if self.tags_selector.selected != old_tag_idx {
+            let subscriptions = framework.data.global.get::<Subscriptions>().unwrap();
+            self.update_channels_pane(subscriptions);
+            changed = true;
         }
 
-        if self.selector.selected == 0 {
+        if self.channels_selector.selected != old_channel_idx || changed {
+            self.emit_filter(framework);
+            self.set_env(framework);
             return Ok(());
         }
-
-        match framework
-            .data
-            .global
-            .get::<Subscriptions>()
-            .unwrap()
-            .0
-            .get(self.selector.selected - 1)
-        {
-            Some(item)
-                if item.channel.id
-                    != match &self.channel_display.item {
-                        Some(displayed) => displayed.id().unwrap_or_default(),
-                        None => "",
-                    } => {}
-            Some(_) => {}
-            None => self.channel_display.item = None,
-        };
 
         Ok(())
     }
@@ -399,7 +463,7 @@ impl FrameworkItem for ChannelList {
         _absolute_x: u16,
         _absolute_y: u16,
     ) -> bool {
-        let chunk = self
+        let chunks = self
             .grid
             .chunks(
                 if let Some(prev_frame) = framework.data.global.get::<Status>().unwrap().prev_frame
@@ -409,112 +473,66 @@ impl FrameworkItem for ChannelList {
                     return false;
                 },
             )
-            .unwrap()[0][1];
+            .unwrap()[0]
+            .clone();
 
-        if !chunk.intersects(Rect::new(x, y, 1, 1)) {
-            return false;
-        }
+        let mut changed = false;
+        let old_tag_idx = self.tags_selector.selected;
+        let old_chan_idx = self.channels_selector.selected;
 
-        let previously_selected = self.selector.selected;
-        let y = (y - chunk.y) as usize + self.selector.scroll;
-
-        if y == self.selector.selected
-            || y == self.selector.selected + 2
-            || y == self.selector.selected + 1
-        {
-            self.select_at_cursor(framework);
-            return true;
-        }
-
-        // clicking on rows after the last item
-        if y > self.selector.items.len() + 1 {
-            let _ = self.selector.last();
-        }
-        if y <= self.selector.selected {
-            self.selector.selected = y;
-        } else if y >= self.selector.selected + 2 {
-            self.selector.selected = y - 2;
-        }
-
-        if self.selector.selected == previously_selected {
-            return false;
-        }
-
-        if self.selector.selected != 0 {
-            let subscriptions = framework.data.global.get_mut::<Subscriptions>().unwrap();
-            let item = subscriptions.0.get_mut(self.selector.selected - 1);
-            let mut found = false;
-            match item {
-                Some(item) if item.channel.id == self.channels[self.selector.selected - 1].id => {
-                    if item.has_new {
-                        item.has_new = false;
-                        found = true;
-                    }
+        if chunks[0].intersects(Rect::new(x, y, 1, 1)) {
+            self.active_pane = ActivePane::Tags;
+            let y_rel = (y - chunks[0].y) as usize + self.tags_selector.scroll;
+            if y_rel < self.tags_selector.items.len() {
+                self.tags_selector.selected = y_rel;
+                if self.tags_selector.selected != old_tag_idx {
+                    let subscriptions = framework.data.global.get::<Subscriptions>().unwrap();
+                    self.update_channels_pane(subscriptions);
+                    changed = true;
                 }
-                _ => subscriptions.0.iter_mut().for_each(|item| {
-                    if item.channel.id == self.channels[self.selector.selected - 1].id {
-                        found = true;
-                        item.has_new = false;
-                    }
-                }),
             }
-
-            if found {
-                self.update_unread(subscriptions);
+        } else if chunks[1].intersects(Rect::new(x, y, 1, 1)) {
+            self.active_pane = ActivePane::Channels;
+            let y_rel = (y - chunks[1].y) as usize + self.channels_selector.scroll;
+            if y_rel < self.channels_selector.items.len() {
+                self.channels_selector.selected = y_rel;
+                if self.channels_selector.selected != old_chan_idx {
+                    changed = true;
+                }
             }
         }
 
-        self.update(framework);
-        self.set_env(framework);
-        // render the new image
-        let status = framework.data.global.get_mut::<Status>().unwrap();
-        status.render_image = true;
-        status
-            .storage
-            .insert::<SubSelect>(SubSelect(self.selector.selected));
-
-        if framework.data.state.get::<VidSelect>().unwrap().0 {
-            framework
-                .data
-                .state
-                .get_mut::<Tasks>()
-                .unwrap()
-                .priority
-                .push(Task::ClearPage);
-        }
-        true
-    }
-}
-
-impl ChannelList {
-    // change `self.item` to the currently selected item
-    pub fn update(&mut self, framework: &mut FrameworkClean) {
-        if self.selector.selected == 0 || self.channels.get(self.selector.selected - 1).is_none() {
+        if changed {
+            self.emit_filter(framework);
+            self.set_env(framework);
             framework
                 .data
                 .global
                 .get_mut::<Status>()
                 .unwrap()
                 .render_image = true;
-            framework
-                .data
-                .state
-                .get_mut::<Tasks>()
-                .unwrap()
-                .priority
-                .push(Task::ClearPage);
-            self.channel_display.item = None;
-            return;
+            return true;
         }
 
-        self.channel_display.item = Some(Item::FullChannel(
-            self.channels[self.selector.selected - 1].clone(),
-        ));
+        false
     }
 }
 
-#[derive(Clone, Copy, Default)]
-pub struct SubSelect(pub usize);
+#[derive(Clone, PartialEq, Eq)]
+pub enum VideoFilter {
+    All,
+    Tag(String),
+    Channel(String),
+}
+
+impl Default for VideoFilter {
+    fn default() -> Self {
+        Self::All
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct SubSelect(pub VideoFilter);
 
 impl Key for SubSelect {
     type Value = Self;
