@@ -196,24 +196,20 @@ impl ChannelList {
             let is_untagged_idx = selected_tag_idx == 1 && has_untagged;
 
             if selected_channel_idx == 0 {
-                return;
-            }
-
-            if let Some(channel) = self.channels.get(selected_channel_idx - 1) {
-                VideoFilter::Channel(channel.id.clone())
-            } else {
-                let actual_tag_idx = if has_untagged {
-                    selected_tag_idx - 2
-                } else {
-                    selected_tag_idx - 1
-                };
                 if is_untagged_idx {
-                    VideoFilter::Tag("".to_string())
-                } else if let Some(tag) = self.tags.get(actual_tag_idx) {
+                    VideoFilter::Tag(String::new())
+                } else if let Some(tag) = self
+                    .tags
+                    .get(selected_tag_idx - 1 - if has_untagged { 1 } else { 0 })
+                {
                     VideoFilter::Tag(tag.clone())
                 } else {
                     VideoFilter::All
                 }
+            } else if let Some(channel) = self.channels.get(selected_channel_idx - 1) {
+                VideoFilter::Channel(channel.id.clone())
+            } else {
+                VideoFilter::All
             }
         };
 
