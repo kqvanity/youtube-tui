@@ -27,7 +27,12 @@
           pname =
             toml.package.name; # make this what ever your cargo.toml package.name is
           version = "v${toml.package.version}";
-          src = ./.; # the folder with the cargo.toml
+          src = pkgs.lib.cleanSourceWith {
+            src = ./.;
+            filter = path: type:
+              pkgs.lib.cleanSourceFilter path type
+              && !(pkgs.lib.hasSuffix ".nix" (baseNameOf path));
+          };
 
           cargoLock.lockFile = ./Cargo.lock;
 
