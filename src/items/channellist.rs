@@ -13,8 +13,6 @@ use crate::{
     global::{functions::set_envs, structs::*},
 };
 
-use super::{ItemInfo, VidSelect};
-
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum ActivePane {
     #[default]
@@ -196,13 +194,19 @@ impl ChannelList {
         } else {
             let has_untagged = subscriptions.0.iter().any(|s| s.tags.is_empty());
             let is_untagged_idx = selected_tag_idx == 1 && has_untagged;
-            let actual_tag_idx = if has_untagged {
-                selected_tag_idx - 2
-            } else {
-                selected_tag_idx - 1
-            };
 
             if selected_channel_idx == 0 {
+                return;
+            }
+
+            if let Some(channel) = self.channels.get(selected_channel_idx - 1) {
+                VideoFilter::Channel(channel.id.clone())
+            } else {
+                let actual_tag_idx = if has_untagged {
+                    selected_tag_idx - 2
+                } else {
+                    selected_tag_idx - 1
+                };
                 if is_untagged_idx {
                     VideoFilter::Tag("".to_string())
                 } else if let Some(tag) = self.tags.get(actual_tag_idx) {
@@ -210,10 +214,6 @@ impl ChannelList {
                 } else {
                     VideoFilter::All
                 }
-            } else if let Some(channel) = self.channels.get(selected_channel_idx - 1) {
-                VideoFilter::Channel(channel.id.clone())
-            } else {
-                VideoFilter::All
             }
         };
 
