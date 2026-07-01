@@ -1,9 +1,6 @@
 use std::error::Error;
 
-use crate::{
-    config::*,
-    global::{structs::*, traits::CollectionNoId},
-};
+use crate::{config::*, global::structs::*};
 
 #[cfg(feature = "clipboard")]
 use crate::global::functions::get_clipboard;

@@ -28,26 +28,42 @@ impl Collection<Item> for WatchHistory {
     }
 }
 
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default)]
 pub struct SearchHistory(pub Vec<String>);
 
 impl Key for SearchHistory {
     type Value = Self;
 }
 
-impl CollectionNoId<String> for SearchHistory {
-    const INDEX_PATH: &'static str = ".local/share/youtube-tui/search_history.json";
-
-    fn items(&self) -> &Vec<String> {
-        &self.0
+impl SearchHistory {
+    pub fn load() -> Self {
+        match crate::global::structs::DatabaseManager::get_search_history() {
+            Ok(items) => Self(items),
+            Err(_) => Self(Vec::new()),
+        }
     }
 
-    fn items_mut(&mut self) -> &mut Vec<String> {
-        &mut self.0
+    pub fn push(&mut self, query: String) {
+        if query.is_empty() {
+            return;
+        }
+        if let Some(pos) = self.0.iter().position(|q| q == &query) {
+            self.0.remove(pos);
+        }
+        self.0.insert(0, query);
+        let _ =
+            crate::global::structs::DatabaseManager::add_search_history(self.0.first().unwrap());
     }
 
-    fn from_items(items: Vec<String>) -> Self {
-        Self(items)
+    pub fn trim(&mut self, limit: usize) {
+        if self.0.len() > limit {
+            self.0.truncate(limit);
+        }
+        let _ = crate::global::structs::DatabaseManager::trim_search_history(limit);
+    }
+
+    pub fn save(&self) {
+        let _ = crate::global::structs::DatabaseManager::trim_search_history(self.0.len());
     }
 }
 

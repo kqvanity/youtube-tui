@@ -70,6 +70,16 @@ impl DatabaseManager {
         )
         .unwrap();
 
+        // Create the search_history table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS search_history (
+                query      TEXT PRIMARY KEY,
+                created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+            )",
+            [],
+        )
+        .unwrap();
+
         unsafe {
             let _ = DATABASE.set(Self {
                 conn: Mutex::new(conn),
@@ -340,5 +350,39 @@ impl DatabaseManager {
             .into_iter()
             .filter(|item| item.tags.iter().any(|t| t == tag))
             .collect())
+    }
+
+    // ─── Search History ──────────────────────────────────────────────────────────
+
+    pub fn get_search_history() -> Result<Vec<String>> {
+        let db = unsafe { DATABASE.get() }.expect("Database not initialized");
+        let conn = db.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT query FROM search_history ORDER BY created_at DESC")?;
+        let items = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<Vec<_>>>()?;
+        Ok(items)
+    }
+
+    pub fn add_search_history(query: &str) -> Result<()> {
+        let db = unsafe { DATABASE.get() }.expect("Database not initialized");
+        let conn = db.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO search_history (query, created_at) VALUES (?1, strftime('%s', 'now'))",
+            params![query],
+        )?;
+        Ok(())
+    }
+
+    pub fn trim_search_history(limit: usize) -> Result<()> {
+        let db = unsafe { DATABASE.get() }.expect("Database not initialized");
+        let conn = db.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM search_history WHERE rowid NOT IN (
+                SELECT rowid FROM search_history ORDER BY created_at DESC LIMIT ?1
+            )",
+            params![limit as i64],
+        )?;
+        Ok(())
     }
 }
