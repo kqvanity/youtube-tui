@@ -161,13 +161,12 @@ impl Subscriptions {
     }
 
     pub fn get_all_videos(&self) -> Vec<MiniVideoItem> {
-        let mut videos = self
-            .0
-            .iter()
-            .flat_map(|item| item.videos.clone())
-            .collect::<Vec<_>>();
-        videos.sort();
-        videos
+        DatabaseManager::get_all_videos().unwrap_or_else(|_| {
+            self.0
+                .iter()
+                .flat_map(|item| item.videos.clone())
+                .collect::<Vec<_>>()
+        })
     }
 
     pub fn get_channels(&self) -> Vec<FullChannelItem> {

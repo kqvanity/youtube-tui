@@ -44,7 +44,7 @@ impl DatabaseManager {
         )
         .unwrap();
 
-        // Create the subscriptions table
+        // Create the subscriptions table (videos moved to separate table)
         conn.execute(
             "CREATE TABLE IF NOT EXISTS subscriptions (
                 channel_id        TEXT PRIMARY KEY,
@@ -52,9 +52,36 @@ impl DatabaseManager {
                 thumbnail_url     TEXT NOT NULL DEFAULT '',
                 last_sync         INTEGER NOT NULL DEFAULT 0,
                 last_sync_channel INTEGER NOT NULL DEFAULT 0,
-                has_new           INTEGER NOT NULL DEFAULT 0,
-                videos_json       TEXT NOT NULL DEFAULT '[]'
+                has_new           INTEGER NOT NULL DEFAULT 0
             )",
+            [],
+        )
+        .unwrap();
+
+        // Create the videos table (replaces videos_json column)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS videos (
+                id            TEXT PRIMARY KEY,
+                channel_id    TEXT NOT NULL REFERENCES subscriptions(channel_id) ON DELETE CASCADE,
+                title         TEXT NOT NULL DEFAULT '',
+                thumbnail_url TEXT NOT NULL DEFAULT '',
+                length        TEXT NOT NULL DEFAULT '',
+                views         TEXT,
+                channel_name  TEXT NOT NULL DEFAULT '',
+                published     TEXT,
+                timestamp     INTEGER,
+                description   TEXT
+            )",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_videos_channel ON videos(channel_id)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_videos_timestamp ON videos(timestamp DESC)",
             [],
         )
         .unwrap();
@@ -172,23 +199,22 @@ impl DatabaseManager {
 
     // ─── Subscriptions ──────────────────────────────────────────────────────────
 
-    /// Insert or update a subscription. The `tags` field on `SubItem` is NOT
-    /// written here — use `tag_subscription` / `untag_subscription` for tags.
+    /// Insert or update a subscription and its videos atomically.
+    /// The `tags` field on `SubItem` is NOT written here —
+    /// use `tag_subscription` / `untag_subscription` for tags.
     pub fn upsert_subscription(item: &crate::global::structs::SubItem) -> Result<()> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
         let conn = db.conn.lock().unwrap();
-        let videos_json = serde_json::to_string(&item.videos).unwrap_or_else(|_| "[]".to_string());
         conn.execute(
-            "INSERT INTO subscriptions 
-                (channel_id, name, thumbnail_url, last_sync, last_sync_channel, has_new, videos_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO subscriptions
+                (channel_id, name, thumbnail_url, last_sync, last_sync_channel, has_new)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(channel_id) DO UPDATE SET
                 name = excluded.name,
                 thumbnail_url = excluded.thumbnail_url,
                 last_sync = excluded.last_sync,
                 last_sync_channel = excluded.last_sync_channel,
-                has_new = excluded.has_new,
-                videos_json = excluded.videos_json",
+                has_new = excluded.has_new",
             params![
                 item.channel.id,
                 item.channel.name,
@@ -196,13 +222,37 @@ impl DatabaseManager {
                 item.last_sync as i64,
                 item.last_sync_channel as i64,
                 item.has_new as i64,
-                videos_json,
             ],
         )?;
+
+        // Replace videos for this channel
+        conn.execute(
+            "DELETE FROM videos WHERE channel_id = ?1",
+            params![item.channel.id],
+        )?;
+        for video in &item.videos {
+            conn.execute(
+                "INSERT INTO videos (id, channel_id, title, thumbnail_url, length, views, channel_name, published, timestamp, description)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    video.id,
+                    item.channel.id,
+                    video.title,
+                    video.thumbnail_url,
+                    video.length,
+                    video.views,
+                    video.channel,
+                    video.published,
+                    video.timestamp.map(|t| t as i64),
+                    video.description,
+                ],
+            )?;
+        }
+
         Ok(())
     }
 
-    /// Remove a subscription (and all its tags via CASCADE).
+    /// Remove a subscription (and all its tags/videos via CASCADE).
     pub fn remove_subscription(channel_id: &str) -> Result<bool> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
         let conn = db.conn.lock().unwrap();
@@ -227,62 +277,113 @@ impl DatabaseManager {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
         let conn = db.conn.lock().unwrap();
 
-        // Load base subscription rows
-        let mut stmt = conn.prepare(
-            "SELECT channel_id, name, thumbnail_url, last_sync, last_sync_channel, has_new, videos_json
+        // Load all subscriptions
+        let mut sub_stmt = conn.prepare(
+            "SELECT channel_id, name, thumbnail_url, last_sync, last_sync_channel, has_new
              FROM subscriptions",
         )?;
-
-        struct Row {
-            channel_id: String,
-            name: String,
-            thumbnail_url: String,
-            last_sync: i64,
-            last_sync_channel: i64,
-            has_new: bool,
-            videos_json: String,
-        }
-
-        let rows: Vec<Row> = stmt
+        let sub_rows: Vec<(String, String, String, i64, i64, bool)> = sub_stmt
             .query_map([], |row| {
-                Ok(Row {
-                    channel_id: row.get(0)?,
-                    name: row.get(1)?,
-                    thumbnail_url: row.get(2)?,
-                    last_sync: row.get(3)?,
-                    last_sync_channel: row.get(4)?,
-                    has_new: row.get::<_, i64>(5)? != 0,
-                    videos_json: row.get(6)?,
-                })
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)? != 0,
+                ))
             })?
             .collect::<Result<Vec<_>>>()?;
 
-        // Load all tags in one query
+        // Load all tags
         let mut tag_stmt =
             conn.prepare("SELECT channel_id, tag FROM subscription_tags ORDER BY channel_id, tag")?;
-        let pairs: Vec<(String, String)> = tag_stmt
+        let tag_pairs: Vec<(String, String)> = tag_stmt
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<Vec<_>>>()?;
+
+        // Load all videos grouped by channel_id
+        let mut vid_stmt = conn.prepare(
+            "SELECT channel_id, id, title, thumbnail_url, length, views, channel_name, published, timestamp, description
+             FROM videos ORDER BY timestamp DESC",
+        )?;
+        let vid_rows: Vec<(
+            String,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            String,
+            Option<String>,
+            Option<i64>,
+            Option<String>,
+        )> = vid_stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<i64>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                ))
+            })?
             .collect::<Result<Vec<_>>>()?;
 
         // Build tag map
         let mut tag_map: std::collections::HashMap<String, Vec<String>> =
             std::collections::HashMap::new();
-        for (cid, tag) in pairs {
+        for (cid, tag) in tag_pairs {
             tag_map.entry(cid).or_default().push(tag);
         }
 
+        // Build videos-by-channel map
+        let mut videos_by_channel: std::collections::HashMap<
+            String,
+            Vec<crate::global::structs::MiniVideoItem>,
+        > = std::collections::HashMap::new();
+        for (
+            channel_id,
+            vid_id,
+            title,
+            thumbnail_url,
+            length,
+            views,
+            channel_name,
+            published,
+            timestamp,
+            description,
+        ) in vid_rows
+        {
+            videos_by_channel.entry(channel_id).or_default().push(
+                crate::global::structs::MiniVideoItem {
+                    id: vid_id,
+                    title,
+                    thumbnail_url,
+                    length,
+                    views,
+                    channel: channel_name,
+                    channel_id: String::new(),
+                    published,
+                    timestamp: timestamp.map(|t| t as u64),
+                    description,
+                },
+            );
+        }
+
         // Assemble SubItems
-        let mut items = Vec::with_capacity(rows.len());
-        for row in rows {
-            use crate::global::structs::{FullChannelItem, MiniVideoItem, SubItem};
-
-            let videos: Vec<MiniVideoItem> =
-                serde_json::from_str(&row.videos_json).unwrap_or_default();
-
+        let mut items = Vec::with_capacity(sub_rows.len());
+        for (channel_id, name, thumbnail_url, last_sync, last_sync_channel, has_new) in sub_rows {
+            use crate::global::structs::{FullChannelItem, SubItem};
             let channel = FullChannelItem {
-                id: row.channel_id.clone(),
-                name: row.name,
-                thumbnail_url: row.thumbnail_url,
+                id: channel_id.clone(),
+                name,
+                thumbnail_url,
                 sub_count: 0,
                 sub_count_text: String::new(),
                 total_views: String::new(),
@@ -290,20 +391,75 @@ impl DatabaseManager {
                 autogenerated: false,
                 description: String::new(),
             };
-
-            let tags = tag_map.remove(&row.channel_id).unwrap_or_default();
+            let tags = tag_map.remove(&channel_id).unwrap_or_default();
+            let videos = videos_by_channel.remove(&channel_id).unwrap_or_default();
 
             items.push(SubItem {
                 channel,
                 videos,
-                last_sync: row.last_sync as u64,
-                last_sync_channel: row.last_sync_channel as u64,
-                has_new: row.has_new,
+                last_sync: last_sync as u64,
+                last_sync_channel: last_sync_channel as u64,
+                has_new,
                 tags,
             });
         }
 
         Ok(items)
+    }
+
+    /// Get all videos across all subscriptions, sorted by timestamp descending.
+    pub fn get_all_videos() -> Result<Vec<crate::global::structs::MiniVideoItem>> {
+        let db = unsafe { DATABASE.get() }.expect("Database not initialized");
+        let conn = db.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, title, thumbnail_url, length, views, channel_name, published, timestamp, description
+             FROM videos ORDER BY timestamp DESC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<i64>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(rows
+            .into_iter()
+            .map(
+                |(
+                    id,
+                    title,
+                    thumbnail_url,
+                    length,
+                    views,
+                    channel,
+                    published,
+                    timestamp,
+                    description,
+                )| {
+                    crate::global::structs::MiniVideoItem {
+                        id,
+                        title,
+                        thumbnail_url,
+                        length,
+                        views,
+                        channel,
+                        channel_id: String::new(),
+                        published,
+                        timestamp: timestamp.map(|t| t as u64),
+                        description,
+                    }
+                },
+            )
+            .collect())
     }
 
     // ─── Tags ───────────────────────────────────────────────────────────────────
