@@ -114,3 +114,88 @@ impl CollectionNoId<String> for ChannelHistory {
     }
 }
 */
+
+#[cfg(test)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_history_default_is_empty() {
+        let h = SearchHistory::default();
+        assert!(h.0.is_empty());
+    }
+
+    #[test]
+    fn watch_history_default_is_empty() {
+        let h = WatchHistory::default();
+        assert!(h.0.is_empty());
+    }
+
+    #[test]
+    fn watch_history_items_accessor() {
+        let items = vec![crate::global::structs::Item::MiniVideo(
+            crate::global::structs::MiniVideoItem {
+                title: "Test".to_string(),
+                id: "v1".to_string(),
+                thumbnail_url: String::new(),
+                length: String::new(),
+                views: None,
+                channel: String::new(),
+                channel_id: String::new(),
+                published: None,
+                timestamp: Some(1000),
+                description: None,
+            },
+        )];
+        let h = WatchHistory(items.clone());
+        assert_eq!(h.0.len(), 1);
+        assert_eq!(h.items().len(), 1);
+    }
+
+    #[test]
+    fn watch_history_from_items() {
+        let items = vec![crate::global::structs::Item::MiniVideo(
+            crate::global::structs::MiniVideoItem {
+                title: "Test".to_string(),
+                id: "v1".to_string(),
+                thumbnail_url: String::new(),
+                length: String::new(),
+                views: None,
+                channel: String::new(),
+                channel_id: String::new(),
+                published: None,
+                timestamp: Some(1000),
+                description: None,
+            },
+        )];
+        let h = WatchHistory::from_items(items.clone());
+        assert_eq!(h.0[0].id().unwrap(), "v1");
+    }
+
+    #[test]
+    fn command_history_default_is_empty() {
+        let h = CommandHistory::default();
+        assert!(h.0.is_empty());
+    }
+
+    #[test]
+    fn command_history_items_accessor() {
+        let h = CommandHistory(vec!["sync".to_string(), "search rust".to_string()]);
+        assert_eq!(h.items().len(), 2);
+    }
+
+    #[test]
+    fn command_history_items_mut() {
+        let mut h = CommandHistory::default();
+        h.items_mut().push("test".to_string());
+        assert_eq!(h.0.len(), 1);
+    }
+
+    #[test]
+    fn command_history_from_items() {
+        let items = vec!["sync".to_string(), "sub test".to_string()];
+        let h = CommandHistory::from_items(items.clone());
+        assert_eq!(h.0, items);
+    }
+}
