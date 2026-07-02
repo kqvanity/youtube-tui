@@ -74,7 +74,7 @@ fn video_item_convert(video: VideoItem) -> CommonVideo {
         description: video.short_description.clone().unwrap_or_default(),
         description_html: video.short_description.unwrap_or_default(),
         views: video.view_count.unwrap_or_default(),
-        length: video.duration.unwrap_or_default(),
+        length: video.duration.unwrap_or(0) / 1000,
         published: video
             .publish_date
             .map(|t| t.unix_timestamp() as u64)

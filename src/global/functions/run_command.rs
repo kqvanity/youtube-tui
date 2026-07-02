@@ -950,6 +950,53 @@ pub fn run_single_command(
                     .push(Task::RenderAll);
             }
         }
+        ["synctag", tag] => {
+            *framework.data.global.get_mut::<Message>().unwrap() =
+                Message::Message(String::from("Syncing tag..."));
+            terminal.draw(|frame| framework.render(frame)).unwrap();
+
+            let mainconfig = framework.data.global.get::<MainConfig>().unwrap();
+            let image_index = mainconfig.image_index;
+            let download_thumbnails = mainconfig.images.display();
+            let syncing = mainconfig.syncing;
+
+            let (success, failed, empty, cached) = framework
+                .data
+                .global
+                .get_mut::<Subscriptions>()
+                .unwrap()
+                .sync_tag(tag, image_index, download_thumbnails, syncing);
+
+            let message = Message::Success(format!(
+                "Tag '{}' synced: {success} success{} | {failed} fail | {cached} cached",
+                tag,
+                if empty != 0 {
+                    format!(" (which {empty} empty)")
+                } else {
+                    String::new()
+                }
+            ));
+
+            if framework.data.state.get::<Page>().unwrap() == &Page::Feed {
+                let tasks = framework.data.state.get_mut::<Tasks>().unwrap();
+                tasks.priority.push(Task::Reload);
+                tasks.priority.push(Task::Custom(TaskFunction::new(Arc::new(
+                    move |framework| {
+                        *framework.data.global.get_mut::<Message>().unwrap() = message.clone();
+                    },
+                ))));
+                tasks.last.push(Task::RenderAll);
+            } else {
+                *framework.data.global.get_mut::<Message>().unwrap() = message;
+                framework
+                    .data
+                    .state
+                    .get_mut::<Tasks>()
+                    .unwrap()
+                    .priority
+                    .push(Task::RenderAll);
+            }
+        }
         ["key", keycode, modifier] => {
             let (keycodeserde, modifier) =
                 match (|| -> Result<(KeyCodeSerde, u8), Box<dyn Error>> {

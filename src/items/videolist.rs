@@ -107,36 +107,41 @@ impl VideoList {
     }
 
     fn select_at_cursor(&self, framework: &mut FrameworkClean) {
-        // if "all feeds" is selected (channel_id is None)
-        // - Sync all
-        // - ...
-        //
-        // if "all feeds is not selected" (channel_id is Some(id))
-        // - Sync channel
-        // - View channel
-        // - Unsub
-        // - ...
+        let filter = &self.previous;
+        let offset = if self.channel_id.is_some() { 3 } else { 1 };
+
         match self.selector.selected {
-            // if "all feeds" and index is 0, sync all feeds
-            0 if self.channel_id.is_none() => framework
-                .data
-                .state
-                .get_mut::<Tasks>()
-                .unwrap()
-                .priority
-                .push(Task::Command("syncall".to_string())),
-            // if not "all feeds" and index is 0, sync only 1 feed
-            0 => framework
-                .data
-                .state
-                .get_mut::<Tasks>()
-                .unwrap()
-                .priority
-                .push(Task::Command(format!(
-                    "sync {}",
-                    self.channel_id.clone().unwrap()
-                ))),
-            // if view channel, load the channel page
+            // index 0: sync based on current scope
+            0 => match filter {
+                super::channellist::VideoFilter::All => {
+                    framework
+                        .data
+                        .state
+                        .get_mut::<Tasks>()
+                        .unwrap()
+                        .priority
+                        .push(Task::Command("syncall".to_string()));
+                }
+                super::channellist::VideoFilter::Tag(tag) => {
+                    framework
+                        .data
+                        .state
+                        .get_mut::<Tasks>()
+                        .unwrap()
+                        .priority
+                        .push(Task::Command(format!("synctag {}", tag)));
+                }
+                super::channellist::VideoFilter::Channel(id) => {
+                    framework
+                        .data
+                        .state
+                        .get_mut::<Tasks>()
+                        .unwrap()
+                        .priority
+                        .push(Task::Command(format!("sync {}", id)));
+                }
+            },
+            // view channel
             1 if self.channel_id.is_some() => framework
                 .data
                 .state
@@ -158,7 +163,7 @@ impl VideoList {
                     "unsub {} ;; reload",
                     self.channel_id.clone().unwrap()
                 ))),
-            // otherwise, load the video
+            // load video
             i => framework
                 .data
                 .state
@@ -167,9 +172,7 @@ impl VideoList {
                 .priority
                 .push(Task::LoadPage(Page::SingleItem(
                     crate::global::structs::SingleItemPage::Video(
-                        self.items[i - if self.channel_id.is_some() { 3 } else { 1 }]
-                            .id
-                            .clone(),
+                        self.items[i - offset].id.clone(),
                     ),
                 ))),
         }
