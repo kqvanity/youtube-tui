@@ -251,7 +251,6 @@ impl SearchProviderTrait for RustyPipeWrapper {
             SearchFilterType::Channel => Some(ItemType::Channel),
         };
 
-        let chunk_size = 3; // Fetch 2 pages from API to simulate a bigger pagination chunk
         let mut results = Vec::new();
         let mut current_token = None;
 
@@ -271,45 +270,23 @@ impl SearchProviderTrait for RustyPipeWrapper {
             )?;
             results.extend(res.items.items);
             current_token = res.items.ctoken;
-
-            for _ in 1..chunk_size {
-                if let Some(token) = current_token {
-                    let paginator = runtime.block_on(self.0.query().continuation(
-                        token,
-                        rustypipe::model::paginator::ContinuationEndpoint::Search,
-                        None,
-                    ))?;
-                    results.extend(paginator.items);
-                    current_token = paginator.ctoken;
-                } else {
-                    break;
-                }
-            }
         } else {
             let token_opt = {
                 let cache = self.1.lock().unwrap();
                 cache.get(&filters.to_string()).cloned()
             };
 
-            if let Some(mut token) = token_opt {
+            if let Some(token) = token_opt {
                 let runtime = RUNTIME.get().unwrap();
                 let lock = RUSTYPIPE_GLOBAL_MUTEX.get_or_init(|| Mutex::new(()));
                 let _guard = lock.lock().unwrap();
-                for _ in 0..chunk_size {
-                    let paginator = runtime.block_on(self.0.query().continuation(
-                        token,
-                        rustypipe::model::paginator::ContinuationEndpoint::Search,
-                        None,
-                    ))?;
-                    results.extend(paginator.items);
-                    if let Some(next_tok) = paginator.ctoken {
-                        token = next_tok;
-                        current_token = Some(token.clone());
-                    } else {
-                        current_token = None;
-                        break;
-                    }
-                }
+                let paginator = runtime.block_on(self.0.query().continuation(
+                    token,
+                    rustypipe::model::paginator::ContinuationEndpoint::Search,
+                    None,
+                ))?;
+                results.extend(paginator.items);
+                current_token = paginator.ctoken;
             } else {
                 return Ok(Vec::new());
             }
