@@ -1,5 +1,4 @@
 use super::Errors;
-use crate::config::BlockList;
 use crate::global::common::{
     channel::Channel, hidden::*, universal::Playlist as FullPlaylist, video::Video, CommonChannel,
     CommonPlaylist, CommonVideo,

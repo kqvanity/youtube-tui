@@ -1,4 +1,3 @@
-use crate::config::serde::ColorVariantSerde::Black;
 use crate::global::traits::{ConfigTrait, SearchProviderTrait};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

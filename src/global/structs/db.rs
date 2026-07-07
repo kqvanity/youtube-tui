@@ -360,20 +360,21 @@ impl DatabaseManager {
             description,
         ) in vid_rows
         {
-            videos_by_channel.entry(channel_id).or_default().push(
-                crate::global::structs::MiniVideoItem {
+            videos_by_channel
+                .entry(channel_id.clone())
+                .or_default()
+                .push(crate::global::structs::MiniVideoItem {
                     id: vid_id,
                     title,
                     thumbnail_url,
                     length,
                     views,
                     channel: channel_name,
-                    channel_id: String::new(),
+                    channel_id,
                     published,
                     timestamp: timestamp.map(|t| t as u64),
                     description,
-                },
-            );
+                });
         }
 
         // Assemble SubItems
@@ -589,244 +590,354 @@ mod tests {
             ",
         )
         .unwrap();
+
+        unsafe {
+            let _ = DATABASE.set(DatabaseManager {
+                conn: Mutex::new(conn.clone()),
+            });
+        }
+
         f(&conn);
     }
 
-    // ─── Blocked channels ────────────────────────────────────────────────────
+    fn with_db_global<F>(f: F)
+    where
+        F: FnOnce(),
+    {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "
+            PRAGMA foreign_keys = ON;
+            CREATE TABLE subscriptions (
+                channel_id        TEXT PRIMARY KEY,
+                name              TEXT NOT NULL DEFAULT '',
+                thumbnail_url     TEXT NOT NULL DEFAULT '',
+                last_sync         INTEGER NOT NULL DEFAULT 0,
+                last_sync_channel INTEGER NOT NULL DEFAULT 0,
+                has_new           INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE subscription_tags (
+                channel_id TEXT NOT NULL REFERENCES subscriptions(channel_id) ON DELETE CASCADE,
+                tag        TEXT NOT NULL,
+                PRIMARY KEY (channel_id, tag)
+            );
+            CREATE TABLE videos (
+                id            TEXT PRIMARY KEY,
+                channel_id    TEXT NOT NULL REFERENCES subscriptions(channel_id) ON DELETE CASCADE,
+                title         TEXT NOT NULL DEFAULT '',
+                thumbnail_url TEXT NOT NULL DEFAULT '',
+                length        TEXT NOT NULL DEFAULT '',
+                views         TEXT,
+                channel_name  TEXT NOT NULL DEFAULT '',
+                published     TEXT,
+                timestamp     INTEGER,
+                description   TEXT
+            );
+            CREATE TABLE search_history (
+                query      TEXT PRIMARY KEY,
+                created_at INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE blocked_channels (id TEXT PRIMARY KEY);
+            CREATE TABLE blocked_playlists (id TEXT PRIMARY KEY);
+            ",
+        )
+        .unwrap();
 
-    #[test]
-    fn block_unblock_channel() {
-        with_test_db(|conn| {
-            conn.execute("INSERT INTO blocked_channels (id) VALUES ('ch1')", [])
-                .unwrap();
+        unsafe {
+            let _ = DATABASE.set(DatabaseManager {
+                conn: Mutex::new(conn.clone()),
+            });
+        }
 
-            let mut stmt = conn
-                .prepare("SELECT id FROM blocked_channels ORDER BY id")
-                .unwrap();
-            let ids: Vec<String> = stmt
-                .query_map([], |row| row.get(0))
-                .unwrap()
-                .map(|r| r.unwrap())
-                .collect();
-            assert_eq!(ids, vec!["ch1"]);
+        fn with_test_db<F>(f: F)
+        where
+            F: FnOnce(&Connection),
+        {
+            let conn = Connection::open_in_memory().unwrap();
+            conn.execute_batch(
+                "
+            PRAGMA foreign_keys = ON;
+            CREATE TABLE subscriptions (
+                channel_id        TEXT PRIMARY KEY,
+                name              TEXT NOT NULL DEFAULT '',
+                thumbnail_url     TEXT NOT NULL DEFAULT '',
+                last_sync         INTEGER NOT NULL DEFAULT 0,
+                last_sync_channel INTEGER NOT NULL DEFAULT 0,
+                has_new           INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE subscription_tags (
+                channel_id TEXT NOT NULL REFERENCES subscriptions(channel_id) ON DELETE CASCADE,
+                tag        TEXT NOT NULL,
+                PRIMARY KEY (channel_id, tag)
+            );
+            CREATE TABLE videos (
+                id            TEXT PRIMARY KEY,
+                channel_id    TEXT NOT NULL REFERENCES subscriptions(channel_id) ON DELETE CASCADE,
+                title         TEXT NOT NULL DEFAULT '',
+                thumbnail_url TEXT NOT NULL DEFAULT '',
+                length        TEXT NOT NULL DEFAULT '',
+                views         TEXT,
+                channel_name  TEXT NOT NULL DEFAULT '',
+                published     TEXT,
+                timestamp     INTEGER,
+                description   TEXT
+            );
+            CREATE TABLE search_history (
+                query      TEXT PRIMARY KEY,
+                created_at INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE blocked_channels (id TEXT PRIMARY KEY);
+            CREATE TABLE blocked_playlists (id TEXT PRIMARY KEY);
+            ",
+            )
+            .unwrap();
 
-            conn.execute("DELETE FROM blocked_channels WHERE id = 'ch1'", [])
-                .unwrap();
-            let count: i64 = conn
-                .query_row("SELECT COUNT(*) FROM blocked_channels", [], |row| {
-                    row.get(0)
-                })
-                .unwrap();
-            assert_eq!(count, 0);
-        });
-    }
+            unsafe {
+                let _ = DATABASE.set(DatabaseManager {
+                    conn: Mutex::new(conn.clone()),
+                });
+            }
 
-    // ─── Videos ───────────────────────────────────────────────────────────────
+            f(&conn);
+        }
 
-    #[test]
-    fn upsert_and_get_videos() {
-        with_test_db(|conn| {
-            conn.execute(
+        // ─── Blocked channels ────────────────────────────────────────────────────
+
+        #[test]
+        fn block_unblock_channel() {
+            with_test_db(|conn| {
+                conn.execute("INSERT INTO blocked_channels (id) VALUES ('ch1')", [])
+                    .unwrap();
+
+                let mut stmt = conn
+                    .prepare("SELECT id FROM blocked_channels ORDER BY id")
+                    .unwrap();
+                let ids: Vec<String> = stmt
+                    .query_map([], |row| row.get(0))
+                    .unwrap()
+                    .map(|r| r.unwrap())
+                    .collect();
+                assert_eq!(ids, vec!["ch1"]);
+
+                conn.execute("DELETE FROM blocked_channels WHERE id = 'ch1'", [])
+                    .unwrap();
+                let count: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM blocked_channels", [], |row| {
+                        row.get(0)
+                    })
+                    .unwrap();
+                assert_eq!(count, 0);
+            });
+        }
+
+        // ─── Videos ───────────────────────────────────────────────────────────────
+
+        #[test]
+        fn upsert_and_get_videos() {
+            with_test_db(|conn| {
+                conn.execute(
                 "INSERT INTO subscriptions (channel_id, name, thumbnail_url, last_sync, last_sync_channel, has_new)
                  VALUES ('ch1', 'Test Channel', '', 0, 0, 0)",
                 [],
             )
             .unwrap();
 
-            conn.execute(
+                conn.execute(
                 "INSERT INTO videos (id, channel_id, title, thumbnail_url, length, views, channel_name, timestamp)
                  VALUES ('v1', 'ch1', 'Video 1', '', '10:00', '1K views', 'Test Channel', 1000)",
                 [],
             )
             .unwrap();
-            conn.execute(
+                conn.execute(
                 "INSERT INTO videos (id, channel_id, title, thumbnail_url, length, views, channel_name, timestamp)
                  VALUES ('v2', 'ch1', 'Video 2', '', '5:00', '500 views', 'Test Channel', 2000)",
                 [],
             )
             .unwrap();
 
-            // Verify order (by timestamp DESC)
-            let mut stmt = conn
+                // Verify order (by timestamp DESC)
+                let mut stmt = conn
                 .prepare("SELECT id, title, timestamp FROM videos WHERE channel_id = 'ch1' ORDER BY timestamp DESC")
                 .unwrap();
-            let rows: Vec<(String, String, i64)> = stmt
-                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-                .unwrap()
-                .map(|r| r.unwrap())
-                .collect();
+                let rows: Vec<(String, String, i64)> = stmt
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                    .unwrap()
+                    .map(|r| r.unwrap())
+                    .collect();
 
-            assert_eq!(rows.len(), 2);
-            assert_eq!(rows[0].0, "v2"); // newer first
-            assert_eq!(rows[0].1, "Video 2");
-            assert_eq!(rows[1].0, "v1");
-        });
-    }
+                assert_eq!(rows.len(), 2);
+                assert_eq!(rows[0].0, "v2"); // newer first
+                assert_eq!(rows[0].1, "Video 2");
+                assert_eq!(rows[1].0, "v1");
+            });
+        }
 
-    #[test]
-    fn videos_cascade_delete_on_unsubscribe() {
-        with_test_db(|conn| {
-            conn.execute(
-                "INSERT INTO subscriptions (channel_id, name) VALUES ('ch1', 'Test')",
-                [],
-            )
-            .unwrap();
-            conn.execute(
-                "INSERT INTO videos (id, channel_id, title) VALUES ('v1', 'ch1', 'Vid')",
-                [],
-            )
-            .unwrap();
-            conn.execute("DELETE FROM subscriptions WHERE channel_id = 'ch1'", [])
-                .unwrap();
-
-            let count: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM videos WHERE channel_id = 'ch1'",
+        #[test]
+        fn videos_cascade_delete_on_unsubscribe() {
+            with_test_db(|conn| {
+                conn.execute(
+                    "INSERT INTO subscriptions (channel_id, name) VALUES ('ch1', 'Test')",
                     [],
-                    |row| row.get(0),
                 )
                 .unwrap();
-            assert_eq!(count, 0);
-        });
-    }
-
-    // ─── Tags ────────────────────────────────────────────────────────────────
-
-    #[test]
-    fn tag_and_untag_subscription() {
-        with_test_db(|conn| {
-            conn.execute(
-                "INSERT INTO subscriptions (channel_id, name) VALUES ('ch1', 'Test')",
-                [],
-            )
-            .unwrap();
-
-            conn.execute(
-                "INSERT INTO subscription_tags (channel_id, tag) VALUES ('ch1', 'music')",
-                [],
-            )
-            .unwrap();
-            conn.execute(
-                "INSERT INTO subscription_tags (channel_id, tag) VALUES ('ch1', 'tech')",
-                [],
-            )
-            .unwrap();
-
-            let mut stmt = conn
-                .prepare("SELECT tag FROM subscription_tags WHERE channel_id = 'ch1' ORDER BY tag")
-                .unwrap();
-            let tags: Vec<String> = stmt
-                .query_map([], |row| row.get(0))
-                .unwrap()
-                .map(|r| r.unwrap())
-                .collect();
-            assert_eq!(tags, vec!["music", "tech"]);
-
-            conn.execute(
-                "DELETE FROM subscription_tags WHERE channel_id = 'ch1' AND tag = 'music'",
-                [],
-            )
-            .unwrap();
-            let remaining: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM subscription_tags WHERE channel_id = 'ch1'",
+                conn.execute(
+                    "INSERT INTO videos (id, channel_id, title) VALUES ('v1', 'ch1', 'Vid')",
                     [],
-                    |row| row.get(0),
                 )
                 .unwrap();
-            assert_eq!(remaining, 1);
-        });
-    }
+                conn.execute("DELETE FROM subscriptions WHERE channel_id = 'ch1'", [])
+                    .unwrap();
 
-    // ─── Search history ──────────────────────────────────────────────────────
+                let count: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM videos WHERE channel_id = 'ch1'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(count, 0);
+            });
+        }
 
-    #[test]
-    fn search_history_replace_on_duplicate() {
-        with_test_db(|conn| {
-            conn.execute(
-                "INSERT INTO search_history (query, created_at) VALUES ('rust tutorial', 1000)",
-                [],
-            )
-            .unwrap();
-            // Simulate INSERT OR REPLACE behavior
-            conn.execute(
+        // ─── Tags ────────────────────────────────────────────────────────────────
+
+        #[test]
+        fn tag_and_untag_subscription() {
+            with_test_db(|conn| {
+                conn.execute(
+                    "INSERT INTO subscriptions (channel_id, name) VALUES ('ch1', 'Test')",
+                    [],
+                )
+                .unwrap();
+
+                conn.execute(
+                    "INSERT INTO subscription_tags (channel_id, tag) VALUES ('ch1', 'music')",
+                    [],
+                )
+                .unwrap();
+                conn.execute(
+                    "INSERT INTO subscription_tags (channel_id, tag) VALUES ('ch1', 'tech')",
+                    [],
+                )
+                .unwrap();
+
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT tag FROM subscription_tags WHERE channel_id = 'ch1' ORDER BY tag",
+                    )
+                    .unwrap();
+                let tags: Vec<String> = stmt
+                    .query_map([], |row| row.get(0))
+                    .unwrap()
+                    .map(|r| r.unwrap())
+                    .collect();
+                assert_eq!(tags, vec!["music", "tech"]);
+
+                conn.execute(
+                    "DELETE FROM subscription_tags WHERE channel_id = 'ch1' AND tag = 'music'",
+                    [],
+                )
+                .unwrap();
+                let remaining: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM subscription_tags WHERE channel_id = 'ch1'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(remaining, 1);
+            });
+        }
+
+        // ─── Search history ──────────────────────────────────────────────────────
+
+        #[test]
+        fn search_history_replace_on_duplicate() {
+            with_test_db(|conn| {
+                conn.execute(
+                    "INSERT INTO search_history (query, created_at) VALUES ('rust tutorial', 1000)",
+                    [],
+                )
+                .unwrap();
+                // Simulate INSERT OR REPLACE behavior
+                conn.execute(
                 "INSERT OR REPLACE INTO search_history (query, created_at) VALUES ('rust tutorial', 2000)",
                 [],
             )
             .unwrap();
 
-            let count: i64 = conn
-                .query_row("SELECT COUNT(*) FROM search_history", [], |row| row.get(0))
-                .unwrap();
-            assert_eq!(count, 1);
+                let count: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM search_history", [], |row| row.get(0))
+                    .unwrap();
+                assert_eq!(count, 1);
 
-            let timestamp: i64 = conn
-                .query_row(
-                    "SELECT created_at FROM search_history WHERE query = 'rust tutorial'",
-                    [],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            assert_eq!(timestamp, 2000);
-        });
-    }
+                let timestamp: i64 = conn
+                    .query_row(
+                        "SELECT created_at FROM search_history WHERE query = 'rust tutorial'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(timestamp, 2000);
+            });
+        }
 
-    #[test]
-    fn search_history_trim_keeps_newest() {
-        with_test_db(|conn| {
-            for i in 0..10 {
+        #[test]
+        fn search_history_trim_keeps_newest() {
+            with_test_db(|conn| {
+                for i in 0..10 {
+                    conn.execute(
+                        &format!(
+                            "INSERT INTO search_history (query, created_at) VALUES ('query{}', {})",
+                            i,
+                            1000 + i
+                        ),
+                        [],
+                    )
+                    .unwrap();
+                }
+
+                // Trim to 5
                 conn.execute(
-                    &format!(
-                        "INSERT INTO search_history (query, created_at) VALUES ('query{}', {})",
-                        i,
-                        1000 + i
-                    ),
-                    [],
-                )
-                .unwrap();
-            }
-
-            // Trim to 5
-            conn.execute(
-                "DELETE FROM search_history WHERE rowid NOT IN (
+                    "DELETE FROM search_history WHERE rowid NOT IN (
                     SELECT rowid FROM search_history ORDER BY created_at DESC LIMIT 5
                 )",
-                [],
-            )
-            .unwrap();
-
-            let count: i64 = conn
-                .query_row("SELECT COUNT(*) FROM search_history", [], |row| row.get(0))
-                .unwrap();
-            assert_eq!(count, 5);
-
-            // Oldest remaining should be query5 (timestamp 1005)
-            let oldest: i64 = conn
-                .query_row(
-                    "SELECT created_at FROM search_history ORDER BY created_at ASC LIMIT 1",
                     [],
-                    |row| row.get(0),
                 )
                 .unwrap();
-            assert_eq!(oldest, 1005);
-        });
-    }
 
-    // ─── Subscriptions ───────────────────────────────────────────────────────
+                let count: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM search_history", [], |row| row.get(0))
+                    .unwrap();
+                assert_eq!(count, 5);
 
-    #[test]
-    fn upsert_subscription_updates_fields() {
-        with_test_db(|conn| {
-            // First insert
-            conn.execute(
+                // Oldest remaining should be query5 (timestamp 1005)
+                let oldest: i64 = conn
+                    .query_row(
+                        "SELECT created_at FROM search_history ORDER BY created_at ASC LIMIT 1",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(oldest, 1005);
+            });
+        }
+
+        // ─── Subscriptions ───────────────────────────────────────────────────────
+
+        #[test]
+        fn upsert_subscription_updates_fields() {
+            with_test_db(|conn| {
+                // First insert
+                conn.execute(
                 "INSERT INTO subscriptions (channel_id, name, thumbnail_url, last_sync, last_sync_channel, has_new)
                  VALUES ('ch1', 'Channel 1', 'http://thumb1', 1000, 0, 1)",
                 [],
             )
             .unwrap();
 
-            // Update with upsert-like logic
-            conn.execute(
+                // Update with upsert-like logic
+                conn.execute(
                 "INSERT INTO subscriptions (channel_id, name, thumbnail_url, last_sync, last_sync_channel, has_new)
                  VALUES ('ch1', 'Channel 1 Updated', 'http://thumb2', 2000, 2000, 0)
                  ON CONFLICT(channel_id) DO UPDATE SET
@@ -839,40 +950,40 @@ mod tests {
             )
             .unwrap();
 
-            let name: String = conn
-                .query_row(
-                    "SELECT name FROM subscriptions WHERE channel_id = 'ch1'",
-                    [],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            assert_eq!(name, "Channel 1 Updated");
+                let name: String = conn
+                    .query_row(
+                        "SELECT name FROM subscriptions WHERE channel_id = 'ch1'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(name, "Channel 1 Updated");
 
-            let last_sync: i64 = conn
-                .query_row(
-                    "SELECT last_sync FROM subscriptions WHERE channel_id = 'ch1'",
-                    [],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            assert_eq!(last_sync, 2000);
-        });
-    }
+                let last_sync: i64 = conn
+                    .query_row(
+                        "SELECT last_sync FROM subscriptions WHERE channel_id = 'ch1'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(last_sync, 2000);
+            });
+        }
 
-    #[test]
-    fn get_all_subscriptions_loads_tags_and_videos() {
-        with_test_db(|conn| {
-            conn.execute(
+        #[test]
+        fn get_all_subscriptions_loads_tags_and_videos() {
+            with_test_db(|conn| {
+                conn.execute(
                 "INSERT INTO subscriptions (channel_id, name) VALUES ('ch1', 'C1'), ('ch2', 'C2')",
                 [],
             )
             .unwrap();
-            conn.execute(
+                conn.execute(
                 "INSERT INTO subscription_tags (channel_id, tag) VALUES ('ch1', 'music'), ('ch1', 'rock'), ('ch2', 'tech')",
                 [],
             )
             .unwrap();
-            conn.execute(
+                conn.execute(
                 "INSERT INTO videos (id, channel_id, title, thumbnail_url, length, channel_name, timestamp)
                  VALUES ('v1', 'ch1', 'Vid 1', '', '5:00', 'C1', 3000),
                         ('v2', 'ch1', 'Vid 2', '', '3:00', 'C1', 2000),
@@ -881,31 +992,155 @@ mod tests {
             )
             .unwrap();
 
-            // Verify sub count
-            let count: i64 = conn
-                .query_row("SELECT COUNT(*) FROM subscriptions", [], |row| row.get(0))
-                .unwrap();
-            assert_eq!(count, 2);
+                // Verify sub count
+                let count: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM subscriptions", [], |row| row.get(0))
+                    .unwrap();
+                assert_eq!(count, 2);
 
-            // Verify tags per channel
-            let ch1_tags: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM subscription_tags WHERE channel_id = 'ch1'",
-                    [],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            assert_eq!(ch1_tags, 2);
+                // Verify tags per channel
+                let ch1_tags: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM subscription_tags WHERE channel_id = 'ch1'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(ch1_tags, 2);
 
-            // Verify videos per channel
-            let ch1_videos: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM videos WHERE channel_id = 'ch1'",
-                    [],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            assert_eq!(ch1_videos, 2);
-        });
+                // Verify videos per channel
+                let ch1_videos: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM videos WHERE channel_id = 'ch1'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(ch1_videos, 2);
+            });
+        }
+
+        #[test]
+        fn upsert_and_load_preserves_video_metadata() {
+            with_test_db(|_conn| {
+                let item = crate::global::structs::SubItem {
+                    channel: crate::global::structs::FullChannelItem {
+                        id: "ch_test_001".to_string(),
+                        name: "Test Channel".to_string(),
+                        thumbnail_url: "http://thumb".to_string(),
+                        sub_count: 0,
+                        sub_count_text: String::new(),
+                        total_views: String::new(),
+                        created: String::new(),
+                        autogenerated: false,
+                        description: String::new(),
+                    },
+                    videos: vec![
+                        crate::global::structs::MiniVideoItem {
+                            id: "vid_001".to_string(),
+                            title: "Test Video 1".to_string(),
+                            thumbnail_url: "http://vid_thumb".to_string(),
+                            length: "10:30".to_string(),
+                            views: Some("1.2K views".to_string()),
+                            channel: "Test Channel".to_string(),
+                            channel_id: "ch_test_001".to_string(),
+                            published: Some("Jan 1 [2024]".to_string()),
+                            timestamp: Some(1704067200),
+                            description: Some("Test desc".to_string()),
+                        },
+                        crate::global::structs::MiniVideoItem {
+                            id: "vid_002".to_string(),
+                            title: "Test Video 2".to_string(),
+                            thumbnail_url: "http://vid_thumb2".to_string(),
+                            length: "5:00".to_string(),
+                            views: None,
+                            channel: "Test Channel".to_string(),
+                            channel_id: "ch_test_001".to_string(),
+                            published: None,
+                            timestamp: Some(1703980800),
+                            description: None,
+                        },
+                    ],
+                    last_sync: 1704067200,
+                    last_sync_channel: 1704067200,
+                    has_new: true,
+                    tags: vec!["test".to_string()],
+                };
+
+                crate::global::structs::DatabaseManager::upsert_subscription(&item).unwrap();
+
+                let loaded =
+                    crate::global::structs::DatabaseManager::get_all_subscriptions().unwrap();
+                assert_eq!(loaded.len(), 1);
+                let loaded_item = &loaded[0];
+
+                assert_eq!(loaded_item.videos.len(), 2);
+                let vid = &loaded_item.videos[0];
+                assert_eq!(vid.id, "vid_001");
+                assert_eq!(vid.channel, "Test Channel");
+                assert_eq!(vid.channel_id, "ch_test_001");
+                assert_eq!(vid.length, "10:30");
+                assert_eq!(vid.views, Some("1.2K views".to_string()));
+                assert_eq!(vid.timestamp, Some(1704067200));
+                assert_eq!(vid.published, Some("Jan 1 [2024]".to_string()));
+                assert_eq!(vid.description, Some("Test desc".to_string()));
+
+                let vid2 = &loaded_item.videos[1];
+                assert_eq!(vid2.id, "vid_002");
+                assert!(vid2.length != "00:00", "length should not be default");
+                assert_eq!(vid2.views, None);
+                assert_eq!(vid2.channel_id, "ch_test_001");
+            });
+        }
+
+        #[test]
+        fn get_all_videos_preserves_metadata() {
+            with_test_db(|_conn| {
+                let item = crate::global::structs::SubItem {
+                    channel: crate::global::structs::FullChannelItem {
+                        id: "ch_ga_001".to_string(),
+                        name: "GA Channel".to_string(),
+                        thumbnail_url: "".to_string(),
+                        sub_count: 0,
+                        sub_count_text: String::new(),
+                        total_views: String::new(),
+                        created: String::new(),
+                        autogenerated: false,
+                        description: String::new(),
+                    },
+                    videos: vec![crate::global::structs::MiniVideoItem {
+                        id: "ga_vid1".to_string(),
+                        title: "GA Video".to_string(),
+                        thumbnail_url: "".to_string(),
+                        length: "2:30".to_string(),
+                        views: Some("500 views".to_string()),
+                        channel: "GA Channel".to_string(),
+                        channel_id: "ch_ga_001".to_string(),
+                        published: Some("Dec 25 [2023]".to_string()),
+                        timestamp: Some(1703558400),
+                        description: Some("GA description".to_string()),
+                    }],
+                    last_sync: 1703558400,
+                    last_sync_channel: 1703558400,
+                    has_new: false,
+                    tags: vec!["ga".to_string()],
+                };
+
+                crate::global::structs::DatabaseManager::upsert_subscription(&item).unwrap();
+
+                let videos = crate::global::structs::DatabaseManager::get_all_videos().unwrap();
+                assert_eq!(videos.len(), 1);
+                let vid = &videos[0];
+                assert_eq!(vid.id, "ga_vid1");
+                assert_eq!(vid.title, "GA Video");
+                assert_eq!(vid.channel, "GA Channel");
+                assert_eq!(vid.length, "2:30");
+                assert_eq!(vid.views, Some("500 views".to_string()));
+                assert_eq!(vid.timestamp, Some(1703558400));
+                assert_eq!(vid.published, Some("Dec 25 [2023]".to_string()));
+                assert_ne!(vid.channel_id, "", "channel_id should not be empty");
+                assert_eq!(vid.channel_id, "ch_ga_001");
+            });
+        }
     }
 }

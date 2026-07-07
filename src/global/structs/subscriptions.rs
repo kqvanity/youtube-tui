@@ -43,7 +43,7 @@ impl Subscriptions {
         let (tx, rx) = mpsc::channel();
 
         // Collect and remove matching items
-        let mut to_sync: Vec<SubItem> = self
+        let to_sync: Vec<SubItem> = self
             .0
             .iter()
             .filter(|item| {

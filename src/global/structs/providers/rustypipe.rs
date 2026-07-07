@@ -18,7 +18,9 @@ use crate::{
 };
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+
+static RUSTYPIPE_GLOBAL_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Clone)]
 pub struct RustyPipeWrapper(RustyPipe, Arc<Mutex<HashMap<String, String>>>);
@@ -142,10 +144,11 @@ impl SearchProviderTrait for RustyPipeWrapper {
         id: &str,
     ) -> Result<crate::global::common::video::Video, Box<dyn std::error::Error>> {
         let query = self.0.query();
-        let (player, details) = RUNTIME
-            .get()
-            .unwrap()
-            .block_on(async { futures::join!(query.player(id), query.video_details(id)) });
+        let runtime = RUNTIME.get().unwrap();
+        let lock = RUSTYPIPE_GLOBAL_MUTEX.get_or_init(|| Mutex::new(()));
+        let _guard = lock.lock().unwrap();
+        let (player, details) =
+            runtime.block_on(async { futures::join!(query.player(id), query.video_details(id)) });
 
         let player = player?;
         let details = details?;
@@ -253,7 +256,10 @@ impl SearchProviderTrait for RustyPipeWrapper {
         let mut current_token = None;
 
         if filters.page == 1 {
-            let res = RUNTIME.get().unwrap().block_on(
+            let runtime = RUNTIME.get().unwrap();
+            let lock = RUSTYPIPE_GLOBAL_MUTEX.get_or_init(|| Mutex::new(()));
+            let _guard = lock.lock().unwrap();
+            let res = runtime.block_on(
                 self.0.query().search_filter(
                     filters.query.clone(),
                     &SearchFilter::new()
@@ -268,15 +274,11 @@ impl SearchProviderTrait for RustyPipeWrapper {
 
             for _ in 1..chunk_size {
                 if let Some(token) = current_token {
-                    let paginator =
-                        RUNTIME
-                            .get()
-                            .unwrap()
-                            .block_on(self.0.query().continuation(
-                                token,
-                                rustypipe::model::paginator::ContinuationEndpoint::Search,
-                                None,
-                            ))?;
+                    let paginator = runtime.block_on(self.0.query().continuation(
+                        token,
+                        rustypipe::model::paginator::ContinuationEndpoint::Search,
+                        None,
+                    ))?;
                     results.extend(paginator.items);
                     current_token = paginator.ctoken;
                 } else {
@@ -290,16 +292,15 @@ impl SearchProviderTrait for RustyPipeWrapper {
             };
 
             if let Some(mut token) = token_opt {
+                let runtime = RUNTIME.get().unwrap();
+                let lock = RUSTYPIPE_GLOBAL_MUTEX.get_or_init(|| Mutex::new(()));
+                let _guard = lock.lock().unwrap();
                 for _ in 0..chunk_size {
-                    let paginator =
-                        RUNTIME
-                            .get()
-                            .unwrap()
-                            .block_on(self.0.query().continuation(
-                                token,
-                                rustypipe::model::paginator::ContinuationEndpoint::Search,
-                                None,
-                            ))?;
+                    let paginator = runtime.block_on(self.0.query().continuation(
+                        token,
+                        rustypipe::model::paginator::ContinuationEndpoint::Search,
+                        None,
+                    ))?;
                     results.extend(paginator.items);
                     if let Some(next_tok) = paginator.ctoken {
                         token = next_tok;
@@ -342,9 +343,10 @@ impl SearchProviderTrait for RustyPipeWrapper {
         id: &str,
     ) -> Result<crate::global::common::channel::Channel, Box<dyn std::error::Error>> {
         let q = self.0.query();
-        let (info, artist) = RUNTIME
-            .get()
-            .unwrap()
+        let runtime = RUNTIME.get().unwrap();
+        let lock = RUSTYPIPE_GLOBAL_MUTEX.get_or_init(|| Mutex::new(()));
+        let _guard = lock.lock().unwrap();
+        let (info, artist) = runtime
             .block_on(async { futures::join!(q.channel_info(id), q.music_artist(id, false)) });
 
         let info = info?;
@@ -379,7 +381,10 @@ impl SearchProviderTrait for RustyPipeWrapper {
     fn trending(
         &self,
     ) -> Result<Vec<crate::global::common::CommonVideo>, Box<dyn std::error::Error>> {
-        let res = RUNTIME.get().unwrap().block_on(self.0.query().trending())?;
+        let runtime = RUNTIME.get().unwrap();
+        let lock = RUSTYPIPE_GLOBAL_MUTEX.get_or_init(|| Mutex::new(()));
+        let _guard = lock.lock().unwrap();
+        let res = runtime.block_on(self.0.query().trending())?;
 
         Ok(res.into_iter().map(video_item_convert).collect())
     }
@@ -392,10 +397,10 @@ impl SearchProviderTrait for RustyPipeWrapper {
         &self,
         id: &str,
     ) -> Result<crate::global::common::universal::Playlist, Box<dyn std::error::Error>> {
-        let res = RUNTIME
-            .get()
-            .unwrap()
-            .block_on(self.0.query().playlist(id))?;
+        let runtime = RUNTIME.get().unwrap();
+        let lock = RUSTYPIPE_GLOBAL_MUTEX.get_or_init(|| Mutex::new(()));
+        let _guard = lock.lock().unwrap();
+        let res = runtime.block_on(self.0.query().playlist(id))?;
 
         Ok(Playlist {
             title: res.name,
@@ -460,10 +465,10 @@ impl SearchProviderTrait for RustyPipeWrapper {
     }
 
     fn channel_videos(&self, id: &str) -> Result<Vec<CommonVideo>, Box<dyn std::error::Error>> {
-        let res = RUNTIME
-            .get()
-            .unwrap()
-            .block_on(self.0.query().channel_videos(id))?;
+        let runtime = RUNTIME.get().unwrap();
+        let lock = RUSTYPIPE_GLOBAL_MUTEX.get_or_init(|| Mutex::new(()));
+        let _guard = lock.lock().unwrap();
+        let res = runtime.block_on(self.0.query().channel_videos(id))?;
 
         Ok(res
             .content
@@ -481,10 +486,10 @@ impl SearchProviderTrait for RustyPipeWrapper {
         &self,
         id: &str,
     ) -> Result<Vec<CommonPlaylist>, Box<dyn std::error::Error>> {
-        let res = RUNTIME
-            .get()
-            .unwrap()
-            .block_on(self.0.query().channel_playlists(id))?;
+        let runtime = RUNTIME.get().unwrap();
+        let lock = RUSTYPIPE_GLOBAL_MUTEX.get_or_init(|| Mutex::new(()));
+        let _guard = lock.lock().unwrap();
+        let res = runtime.block_on(self.0.query().channel_playlists(id))?;
 
         Ok(res
             .content
