@@ -593,7 +593,7 @@ mod tests {
 
         unsafe {
             let _ = DATABASE.set(DatabaseManager {
-                conn: Mutex::new(conn.clone()),
+                conn: Mutex::new(Connection::open_in_memory().unwrap()),
             });
         }
 
@@ -645,7 +645,7 @@ mod tests {
 
         unsafe {
             let _ = DATABASE.set(DatabaseManager {
-                conn: Mutex::new(conn.clone()),
+                conn: Mutex::new(Connection::open_in_memory().unwrap()),
             });
         }
 
@@ -694,7 +694,7 @@ mod tests {
 
             unsafe {
                 let _ = DATABASE.set(DatabaseManager {
-                    conn: Mutex::new(conn.clone()),
+                    conn: Mutex::new(Connection::open_in_memory().unwrap()),
                 });
             }
 
