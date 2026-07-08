@@ -34,64 +34,95 @@ impl Subscriptions {
         download_thumbnails: bool,
         syncconfig: SyncConfig,
     ) -> (u32, u32, u32, u32) {
-        let mut failed = 0u32;
-        let mut success = 0u32;
-        let mut empty = 0u32;
-        let mut cached = 0u32;
+        let failed = Arc::new(AtomicU32::new(0));
+        let success = Arc::new(AtomicU32::new(0));
+        let empty = Arc::new(AtomicU32::new(0));
+        let cached = Arc::new(AtomicU32::new(0));
 
         let now = chrono::Utc::now().timestamp() as u64;
 
-        // Process matching items in-place without removing from self.0
-        for item in self.0.iter_mut() {
-            let matches_tag = if tag.is_empty() {
-                item.tags.is_empty()
-            } else {
-                item.tags.contains(&tag.to_string())
-            };
-
-            if !matches_tag {
-                continue;
-            }
-
-            if item.last_sync > now - syncconfig.sync_videos_cooldown_secs {
-                cached += 1;
-                continue;
-            }
-
-            let res = sync_one(
-                &item.channel.id,
-                image_index,
-                download_thumbnails,
-                syncconfig.sync_channel_info
-                    && syncconfig.sync_channel_cooldown_secs + item.last_sync_channel < now,
-            );
-
-            match res {
-                Ok((videos, _channel)) if videos.is_empty() => {
-                    empty += 1;
+        // Collect indices and clone items for parallel processing
+        let items_to_sync: Vec<(usize, SubItem)> = self
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| {
+                if tag.is_empty() {
+                    item.tags.is_empty()
+                } else {
+                    item.tags.contains(&tag.to_string())
                 }
-                Ok((videos, channel)) => {
-                    success += 1;
-                    item.has_new = !videos.is_empty()
-                        && (item.videos.is_empty() || videos[0].id != item.videos[0].id);
-                    item.videos = videos;
-                    item.last_sync = now;
-                    if let Some(channel) = channel {
-                        item.channel = channel;
-                        item.last_sync_channel = now;
+            })
+            .map(|(i, item)| (i, item.clone()))
+            .collect();
+
+        // Process in parallel using thread::scope for safe borrowing
+        let results: Vec<(usize, SubItem)> = thread::scope(|s| {
+            let mut handles = Vec::new();
+
+            for (idx, mut item) in items_to_sync {
+                if item.last_sync > now - syncconfig.sync_videos_cooldown_secs {
+                    cached.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    continue;
+                }
+
+                let success = success.clone();
+                let failed = failed.clone();
+                let empty = empty.clone();
+
+                let handle = s.spawn(move || {
+                    let res = sync_one(
+                        &item.channel.id,
+                        image_index,
+                        download_thumbnails,
+                        syncconfig.sync_channel_info
+                            && syncconfig.sync_channel_cooldown_secs + item.last_sync_channel < now,
+                    );
+
+                    match res {
+                        Ok((videos, _channel)) if videos.is_empty() => {
+                            empty.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        Ok((videos, channel)) => {
+                            success.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            item.has_new = !videos.is_empty()
+                                && (item.videos.is_empty() || videos[0].id != item.videos[0].id);
+                            item.videos = videos;
+                            item.last_sync = now;
+                            if let Some(channel) = channel {
+                                item.channel = channel;
+                                item.last_sync_channel = now;
+                            }
+                        }
+                        _ => {
+                            failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
                     }
-                }
-                _ => {
-                    failed += 1;
-                }
+                    (idx, item)
+                });
+
+                handles.push(handle);
             }
+
+            // Collect results
+            handles.into_iter().filter_map(|h| h.join().ok()).collect()
+        });
+
+        // Apply updates back to self.0
+        for (idx, updated) in results {
+            self.0[idx] = updated;
         }
 
         self.0.sort();
 
         let _ = self.save();
 
-        (success, failed, empty, cached)
+        (
+            success.load(std::sync::atomic::Ordering::Relaxed),
+            failed.load(std::sync::atomic::Ordering::Relaxed),
+            empty.load(std::sync::atomic::Ordering::Relaxed),
+            cached.load(std::sync::atomic::Ordering::Relaxed),
+        )
     }
 
     /// Res<(success, failed)>
