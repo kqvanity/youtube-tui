@@ -56,9 +56,12 @@ impl Subscriptions {
             .map(|(i, item)| (i, item.clone()))
             .collect();
 
-        // Process in parallel using thread::scope for safe borrowing
+        // Process in parallel with a concurrency limit of 8
+        const MAX_CONCURRENCY: usize = 8;
+
         let results: Vec<(usize, SubItem)> = thread::scope(|s| {
             let mut handles = Vec::new();
+            let mut completed = Vec::new();
 
             for (idx, mut item) in items_to_sync {
                 if item.last_sync > now - syncconfig.sync_videos_cooldown_secs {
@@ -102,10 +105,25 @@ impl Subscriptions {
                 });
 
                 handles.push(handle);
+
+                // Limit concurrency: when at capacity, join all and collect
+                if handles.len() >= MAX_CONCURRENCY {
+                    for h in handles.drain(..) {
+                        if let Ok(r) = h.join() {
+                            completed.push(r);
+                        }
+                    }
+                }
             }
 
-            // Collect results
-            handles.into_iter().filter_map(|h| h.join().ok()).collect()
+            // Join remaining
+            for h in handles {
+                if let Ok(r) = h.join() {
+                    completed.push(r);
+                }
+            }
+
+            completed
         });
 
         // Apply updates back to self.0
