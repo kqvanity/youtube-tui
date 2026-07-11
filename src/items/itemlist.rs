@@ -27,6 +27,49 @@ pub struct ItemList {
 }
 
 impl ItemList {
+    /// Build display strings for the text list, prepending a bookmark marker
+    /// to items that are already in the user's Library.
+    fn build_display_strings(&self, framework: &FrameworkClean) -> Vec<String> {
+        let library = framework.data.global.get::<Library>();
+        let bookmarked_ids: std::collections::HashSet<&str> = library
+            .map(|lib| lib.0.iter().filter_map(|item| item.id()).collect())
+            .unwrap_or_default();
+
+        self.items
+            .iter()
+            .map(|item| {
+                let title = match item {
+                    Item::MiniVideo(video) => &video.title,
+                    Item::MiniPlaylist(playlist) => &playlist.title,
+                    Item::MiniChannel(channel) => &channel.name,
+                    Item::FullVideo(video) => &video.title,
+                    Item::FullPlaylist(playlist) => &playlist.title,
+                    Item::FullChannel(channel) => &channel.name,
+                    Item::Page(b) => {
+                        return if *b { "Next page" } else { "Previous page" }.to_string()
+                    }
+                };
+                if let Some(id) = item.id() {
+                    if bookmarked_ids.contains(id) {
+                        return format!("\u{2605} {}", title);
+                    }
+                }
+                title.to_string()
+            })
+            .collect()
+    }
+
+    /// Rebuild the text list with bookmark-aware display strings.
+    pub fn refresh_textlist(&mut self, framework: &FrameworkClean) {
+        let display_strings = self.build_display_strings(framework);
+        self.textlist.items = display_strings;
+        if self.textlist.height.is_some() {
+            let _ = self.textlist.update();
+        }
+    }
+}
+
+impl ItemList {
     pub fn infalte_item_update(
         &self,
         mainconfig: &MainConfig,
@@ -435,7 +478,7 @@ impl FrameworkItem for ItemList {
         }
 
         // update the items in text list
-        self.textlist.set_items(&self.items).unwrap();
+        self.refresh_textlist(framework);
         self.update(framework);
 
         {
@@ -518,7 +561,8 @@ impl FrameworkItem for ItemList {
                                 if !filtered.is_empty() {
                                     let filtered_len = filtered.len();
                                     self.items.extend(filtered);
-                                    if self.textlist.set_items(&self.items).is_err() {
+                                    self.refresh_textlist(framework);
+                                    if self.textlist.update().is_err() {
                                         break;
                                     }
 

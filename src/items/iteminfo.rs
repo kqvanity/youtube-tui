@@ -101,27 +101,51 @@ impl FrameworkItem for ItemInfo {
 
         let appearance = framework.data.global.get::<AppearanceConfig>().unwrap();
 
+        // Helper: check if an item is bookmarked in the Library
+        let bookmarker = |id: &str| -> bool {
+            framework
+                .data
+                .global
+                .get::<Library>()
+                .is_some_and(|library| library.0.iter().any(|item| item.id() == Some(id)))
+        };
+
         // Helper: look up subscription status + tags for a channel id
         let sub_spans = |channel_id: &str| -> Vec<(String, Style)> {
             let subscriptions = framework.data.global.get::<Subscriptions>().unwrap();
             match subscriptions.0.iter().find(|s| s.channel.id == channel_id) {
                 Some(sub) => {
                     let mut v = vec![(
-                        String::from("✓ Subscribed"),
+                        String::from("  Subscription: \u{2713} Subscribed"),
                         Style::default().fg(appearance.colors.item_info.sub_count),
                     )];
                     if !sub.tags.is_empty() {
                         v.push((
-                            format!("  Tags: {}", sub.tags.join(", ")),
+                            format!("           Tags: {}", sub.tags.join(", ")),
                             Style::default().fg(appearance.colors.item_info.tag),
                         ));
                     }
                     v
                 }
                 None => vec![(
-                    String::from("○ Not subscribed"),
+                    String::from("  Subscription: \u{25CB} Not subscribed"),
                     Style::default().fg(appearance.colors.item_info.published),
                 )],
+            }
+        };
+
+        // Helper: bookmark status string
+        let bookmark_spans = |id: &str| -> Vec<(String, Style)> {
+            if bookmarker(id) {
+                vec![(
+                    String::from("  Library: \u{2605} Bookmarked"),
+                    Style::default().fg(appearance.colors.item_info.likes),
+                )]
+            } else {
+                vec![(
+                    String::from("  Library: Not bookmarked"),
+                    Style::default().fg(appearance.colors.item_info.published),
+                )]
             }
         };
 
@@ -132,7 +156,7 @@ impl FrameworkItem for ItemInfo {
                 let mut out = (
                     vec![
                         (
-                            String::from("[Video]"),
+                            String::from("  \u{25B6} Video"),
                             Style::default().fg(appearance.colors.item_info.tag),
                         ),
                         (
@@ -149,32 +173,33 @@ impl FrameworkItem for ItemInfo {
                 );
                 if let Some(views) = &minivideo.views {
                     out.0.push((
-                        format!("{views} views"),
+                        format!("  Views: {views}"),
                         Style::default().fg(appearance.colors.item_info.viewcount),
                     ));
                 }
                 out.0.push((
-                    format!("Length: {}", minivideo.length),
+                    format!("  Length: {}", minivideo.length),
                     Style::default().fg(appearance.colors.item_info.length),
                 ));
                 out.0.push((
-                    format!("Uploaded by {}", minivideo.channel),
+                    format!("  Channel: {}", minivideo.channel),
                     Style::default().fg(appearance.colors.item_info.author),
                 ));
                 out.0.extend(sub_spans(&minivideo.channel_id));
+                out.0.extend(bookmark_spans(&minivideo.id));
                 if let Some(published) = &minivideo.published {
                     out.0.push((
-                        format!("Published {published}"),
+                        format!("  Published {published}"),
                         Style::default().fg(appearance.colors.item_info.published),
                     ));
                 }
 
                 out
             }
-            Item::MiniPlaylist(miniplaylist) => (
-                vec![
+            Item::MiniPlaylist(miniplaylist) => {
+                let mut spans = vec![
                     (
-                        String::from("[Playlist]"),
+                        String::from("  \u{2630} Playlist"),
                         Style::default().fg(appearance.colors.item_info.tag),
                     ),
                     (
@@ -182,28 +207,21 @@ impl FrameworkItem for ItemInfo {
                         Style::default().fg(appearance.colors.item_info.title),
                     ),
                     (
-                        format!("Created by by {}", miniplaylist.channel),
+                        format!("  Channel: {}", miniplaylist.channel),
                         Style::default().fg(appearance.colors.item_info.author),
                     ),
                     (
-                        format!(
-                            "{} video{}",
-                            miniplaylist.video_count,
-                            if miniplaylist.video_count <= 1 {
-                                ""
-                            } else {
-                                "s"
-                            }
-                        ),
+                        format!("  Videos: {}", miniplaylist.video_count,),
                         Style::default().fg(appearance.colors.item_info.video_count),
                     ),
-                ],
-                None,
-            ),
+                ];
+                spans.extend(bookmark_spans(&miniplaylist.id));
+                (spans, None)
+            }
             Item::MiniChannel(minichannel) => {
                 let mut spans = vec![
                     (
-                        String::from("[Channel]"),
+                        String::from("  \u{25A0} Channel"),
                         Style::default().fg(appearance.colors.item_info.tag),
                     ),
                     (
@@ -211,27 +229,16 @@ impl FrameworkItem for ItemInfo {
                         Style::default().fg(appearance.colors.item_info.title),
                     ),
                     (
-                        format!(
-                            "{} subscriber{}",
-                            minichannel.sub_count_text,
-                            if minichannel.sub_count <= 1 { "" } else { "s" }
-                        ),
+                        format!("  Subscribers: {}", minichannel.sub_count_text,),
                         Style::default().fg(appearance.colors.item_info.sub_count),
                     ),
                     (
-                        format!(
-                            "{} video{}",
-                            minichannel.video_count,
-                            if minichannel.video_count <= 1 {
-                                ""
-                            } else {
-                                "s"
-                            }
-                        ),
+                        format!("  Videos: {}", minichannel.video_count,),
                         Style::default().fg(appearance.colors.item_info.video_count),
                     ),
                 ];
                 spans.extend(sub_spans(&minichannel.id));
+                spans.extend(bookmark_spans(&minichannel.id));
                 (
                     spans,
                     Some((
@@ -243,7 +250,7 @@ impl FrameworkItem for ItemInfo {
             Item::FullVideo(fullvideo) => {
                 let mut spans = vec![
                     (
-                        String::from("[Video]"),
+                        String::from("  \u{25B6} Video"),
                         Style::default().fg(appearance.colors.item_info.tag),
                     ),
                     (
@@ -251,30 +258,28 @@ impl FrameworkItem for ItemInfo {
                         Style::default().fg(appearance.colors.item_info.title),
                     ),
                     (
-                        format!("{} views", fullvideo.views),
+                        format!("  Views: {}", fullvideo.views),
                         Style::default().fg(appearance.colors.item_info.viewcount),
                     ),
                     (
-                        format!("{} likes", fullvideo.likes),
+                        format!("  Likes: {}", fullvideo.likes),
                         Style::default().fg(appearance.colors.item_info.likes),
                     ),
                     (
-                        format!("Length: {}", fullvideo.length),
+                        format!("  Length: {}", fullvideo.length),
                         Style::default().fg(appearance.colors.item_info.length),
                     ),
                     (
-                        format!(
-                            "Uploaded by {} ({} subscribers)",
-                            fullvideo.channel, fullvideo.sub_count
-                        ),
+                        format!("  Channel: {}", fullvideo.channel),
                         Style::default().fg(appearance.colors.item_info.author),
                     ),
                     (
-                        format!("Published {}", fullvideo.published),
+                        format!("  Published {}", fullvideo.published),
                         Style::default().fg(appearance.colors.item_info.published),
                     ),
                 ];
                 spans.extend(sub_spans(&fullvideo.channel_id));
+                spans.extend(bookmark_spans(&fullvideo.id));
                 (
                     spans,
                     Some((
@@ -283,10 +288,10 @@ impl FrameworkItem for ItemInfo {
                     )),
                 )
             }
-            Item::FullPlaylist(fullplaylist) => (
-                vec![
+            Item::FullPlaylist(fullplaylist) => {
+                let mut spans = vec![
                     (
-                        String::from("[Playlist]"),
+                        String::from("  \u{2630} Playlist"),
                         Style::default().fg(appearance.colors.item_info.tag),
                     ),
                     (
@@ -294,34 +299,30 @@ impl FrameworkItem for ItemInfo {
                         Style::default().fg(appearance.colors.item_info.title),
                     ),
                     (
-                        format!("Created by by {}", fullplaylist.channel),
+                        format!("  Channel: {}", fullplaylist.channel),
                         Style::default().fg(appearance.colors.item_info.author),
                     ),
                     (
-                        format!(
-                            "{} video{}",
-                            fullplaylist.video_count,
-                            if fullplaylist.video_count <= 1 {
-                                ""
-                            } else {
-                                "s"
-                            }
-                        ),
+                        format!("  Videos: {}", fullplaylist.video_count,),
                         Style::default().fg(appearance.colors.item_info.video_count),
                     ),
-                ],
-                Some((
-                    fullplaylist.description.clone(),
-                    Style::default().fg(appearance.colors.item_info.description),
-                )),
-            ),
+                ];
+                spans.extend(bookmark_spans(&fullplaylist.id));
+                (
+                    spans,
+                    Some((
+                        fullplaylist.description.clone(),
+                        Style::default().fg(appearance.colors.item_info.description),
+                    )),
+                )
+            }
             Item::FullChannel(fullchannel) => {
                 let mut spans = vec![
                     (
                         if fullchannel.autogenerated {
-                            String::from("[Auto generated]")
+                            String::from("  \u{25A0} Auto generated")
                         } else {
-                            String::from("[Channel]")
+                            String::from("  \u{25A0} Channel")
                         },
                         Style::default().fg(appearance.colors.item_info.tag),
                     ),
@@ -330,23 +331,20 @@ impl FrameworkItem for ItemInfo {
                         Style::default().fg(appearance.colors.item_info.title),
                     ),
                     (
-                        format!("{} total views", fullchannel.total_views),
+                        format!("  Total views: {}", fullchannel.total_views),
                         Style::default().fg(appearance.colors.item_info.viewcount),
                     ),
                     (
-                        format!(
-                            "{} subscriber{}",
-                            fullchannel.sub_count_text,
-                            if fullchannel.sub_count <= 1 { "" } else { "s" }
-                        ),
+                        format!("  Subscribers: {}", fullchannel.sub_count_text,),
                         Style::default().fg(appearance.colors.item_info.sub_count),
                     ),
                     (
-                        format!("Created at {}", fullchannel.created),
+                        format!("  Created {}", fullchannel.created),
                         Style::default().fg(appearance.colors.item_info.published),
                     ),
                 ];
                 spans.extend(sub_spans(&fullchannel.id));
+                spans.extend(bookmark_spans(&fullchannel.id));
                 (
                     spans,
                     Some((
