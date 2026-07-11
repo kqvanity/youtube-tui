@@ -273,15 +273,15 @@ const fn search_provider_default() -> SearchProvider {
 }
 
 const fn search_history_default() -> usize {
-    75
+    75_000
 }
 
 const fn commands_history_default() -> usize {
-    75
+    75_000
 }
 
 const fn watch_history_default() -> usize {
-    50
+    5_000
 }
 
 const fn mouse_support_default() -> bool {
