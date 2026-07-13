@@ -1,9 +1,9 @@
 use crate::global::traits::{ConfigTrait, SearchProviderTrait};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::env;
 use typemap::Key;
 
-/// `main.yml`, the main config file
 #[derive(Serialize, Deserialize, Clone)]
 pub struct MainConfig {
     #[serde(default = "mouse_support_default")]
@@ -82,17 +82,20 @@ impl Default for MainConfig {
             message_bar_default: message_bar_default_default(),
             images: images_default(),
             image_index: image_index_default(),
-            refresh_after_modifying_search_filters: refresh_after_modifying_search_filters_default(
-            ),
+            refresh_after_modifying_search_filters: refresh_after_modifying_search_filters_default(),
             textbar_scroll_behaviour: textbar_scroll_behaviour_default(),
             limits: Limits::default(),
             syncing: sync_config_default(),
             provider: provider_default(),
             search_provider: search_provider_default(),
-            api_key: api_key_default(),
             shell: shell_default(),
             legacy_input_handling: legacy_input_handling_default(),
-
+            api_key: {
+                if provider_default() == Provider::YouTube {
+                    api_key_default();
+                }
+                "".to_string()
+            },
             env: default_env(),
             block_list: blacklist(),
         }
@@ -317,7 +320,7 @@ fn shell_default() -> String {
 }
 
 fn api_key_default() -> String {
-    String::from("YOUR API KEY HERE")
+    env::var("YOUTUBE_API_KEY").expect("Unset API Key")
 }
 
 const fn download_images_default() -> bool {
@@ -348,4 +351,24 @@ pub enum TextbarScrollBehaviour {
 }
 const fn textbar_scroll_behaviour_default() -> TextbarScrollBehaviour {
     TextbarScrollBehaviour::History
+}
+
+#[cfg(test)]
+mod tests {
+    use super::api_key_default;
+    use std::env;
+
+    #[test]
+    fn api_key_default_reads_env_var() {
+        env::set_var("YOUTUBE_API_KEY", "test-key-123");
+        assert_eq!(api_key_default(), "test-key-123");
+        env::remove_var("YOUTUBE_API_KEY");
+    }
+
+    #[test]
+    #[should_panic(expected = "Unset API Key")]
+    fn api_key_default_panics_when_unset() {
+        env::remove_var("YOUTUBE_API_KEY");
+        api_key_default();
+    }
 }
