@@ -90,11 +90,9 @@ impl Default for MainConfig {
             search_provider: search_provider_default(),
             shell: shell_default(),
             legacy_input_handling: legacy_input_handling_default(),
-            api_key: {
-                if provider_default() == Provider::YouTube {
-                    api_key_default();
-                }
-                "".to_string()
+            api_key: match provider_default() {
+                Provider::YouTube => api_key_default(),
+                _ => "".to_string()
             },
             env: default_env(),
             block_list: blacklist(),
