@@ -279,23 +279,23 @@ fn text_special_default() -> ColorSerde {
 }
 
 fn text_secondary_default() -> ColorSerde {
-    ColorSerde::ColorVariant(ColorVariantSerde::Reset)
+    ColorSerde::Hex(String::from("#A1A1AA"))
 }
 
 fn outline_default() -> ColorSerde {
-    ColorSerde::ColorVariant(ColorVariantSerde::Reset)
+    ColorSerde::Hex(String::from("#3F3F46"))
 }
 
 fn outline_selected_default() -> ColorSerde {
-    ColorSerde::ColorVariant(ColorVariantSerde::LightBlue)
+    ColorSerde::Hex(String::from("#8B5CF6"))
 }
 
 fn outline_hover_default() -> ColorSerde {
-    ColorSerde::ColorVariant(ColorVariantSerde::LightRed)
+    ColorSerde::Hex(String::from("#EC4899"))
 }
 
 fn outline_secondary_default() -> ColorSerde {
-    ColorSerde::ColorVariant(ColorVariantSerde::LightYellow)
+    ColorSerde::Hex(String::from("#10B981"))
 }
 
 fn message_outline_default() -> ColorSerde {
@@ -315,15 +315,15 @@ fn text_error_default() -> ColorSerde {
 }
 
 fn tag_default() -> ColorSerde {
-    ColorSerde::ColorVariant(ColorVariantSerde::Gray)
+    ColorSerde::Hex(String::from("#6366F1"))
 }
 
 fn title_default() -> ColorSerde {
-    ColorSerde::ColorVariant(ColorVariantSerde::LightBlue)
+    ColorSerde::Hex(String::from("#F8FAFC"))
 }
 
 fn description_default() -> ColorSerde {
-    ColorSerde::ColorVariant(ColorVariantSerde::Gray)
+    ColorSerde::Hex(String::from("#94A3B8"))
 }
 
 fn author_default() -> ColorSerde {
