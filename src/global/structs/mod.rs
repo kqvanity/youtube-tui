@@ -1,5 +1,7 @@
 //! enums and structs
 mod db;
+mod schema;
+mod models;
 mod errors;
 mod history;
 mod item;

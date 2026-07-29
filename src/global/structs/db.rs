@@ -1,12 +1,18 @@
+use super::models::*;
+use super::schema::*;
+use diesel::prelude::*;
+use diesel::sql_query;
+use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 use home::home_dir;
-use rusqlite::{params, Connection, Result};
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
+
+pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
 static mut DATABASE: OnceLock<DatabaseManager> = OnceLock::new();
 
 pub struct DatabaseManager {
-    conn: Mutex<Connection>,
+    conn: Mutex<SqliteConnection>,
 }
 
 impl DatabaseManager {
@@ -20,92 +26,17 @@ impl DatabaseManager {
             std::fs::create_dir_all(parent).unwrap();
         }
 
-        let conn = Connection::open(db_path).unwrap();
+        let database_url = db_path.to_str().unwrap();
+        let mut conn = SqliteConnection::establish(database_url)
+            .expect(&format!("Error connecting to {}", database_url));
 
         // Enable foreign keys and WAL mode for better concurrency
-        conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")
+        sql_query("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")
+            .execute(&mut conn)
             .unwrap();
 
-        // Create the blocked_channels table
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS blocked_channels (
-                id TEXT PRIMARY KEY
-            )",
-            [],
-        )
-        .unwrap();
-
-        // Create the blocked_playlists table
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS blocked_playlists (
-                id TEXT PRIMARY KEY
-            )",
-            [],
-        )
-        .unwrap();
-
-        // Create the subscriptions table (videos moved to separate table)
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS subscriptions (
-                channel_id        TEXT PRIMARY KEY,
-                name              TEXT NOT NULL DEFAULT '',
-                thumbnail_url     TEXT NOT NULL DEFAULT '',
-                last_sync         INTEGER NOT NULL DEFAULT 0,
-                last_sync_channel INTEGER NOT NULL DEFAULT 0,
-                has_new           INTEGER NOT NULL DEFAULT 0
-            )",
-            [],
-        )
-        .unwrap();
-
-        // Create the videos table (replaces videos_json column)
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS videos (
-                id            TEXT PRIMARY KEY,
-                channel_id    TEXT NOT NULL REFERENCES subscriptions(channel_id) ON DELETE CASCADE,
-                title         TEXT NOT NULL DEFAULT '',
-                thumbnail_url TEXT NOT NULL DEFAULT '',
-                length        TEXT NOT NULL DEFAULT '',
-                views         TEXT,
-                channel_name  TEXT NOT NULL DEFAULT '',
-                published     TEXT,
-                timestamp     INTEGER,
-                description   TEXT
-            )",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_videos_channel ON videos(channel_id)",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_videos_timestamp ON videos(timestamp DESC)",
-            [],
-        )
-        .unwrap();
-
-        // Create the subscription_tags table (many-to-many)
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS subscription_tags (
-                channel_id TEXT NOT NULL REFERENCES subscriptions(channel_id) ON DELETE CASCADE,
-                tag        TEXT NOT NULL,
-                PRIMARY KEY (channel_id, tag)
-            )",
-            [],
-        )
-        .unwrap();
-
-        // Create the search_history table
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS search_history (
-                query      TEXT PRIMARY KEY,
-                created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
-            )",
-            [],
-        )
-        .unwrap();
+        // Run migrations
+        conn.run_pending_migrations(MIGRATIONS).unwrap();
 
         unsafe {
             let _ = DATABASE.set(Self {
@@ -117,84 +48,90 @@ impl DatabaseManager {
     // ─── Blocked channels ───────────────────────────────────────────────────────
 
     /// Block a channel by its ID
-    pub fn block_channel(id: &str) -> Result<()> {
+    pub fn block_channel(id: &str) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
-        let conn = db.conn.lock().unwrap();
-        conn.execute(
-            "INSERT OR IGNORE INTO blocked_channels (id) VALUES (?1)",
-            params![id],
-        )?;
+        let mut conn = db.conn.lock().unwrap();
+        
+        diesel::insert_into(blocked_channels::table)
+            .values(&BlockedChannel { id: id.to_string() })
+            .on_conflict_do_nothing()
+            .execute(&mut *conn)?;
+            
         Ok(())
     }
 
     /// Unblock a channel by its ID
-    pub fn unblock_channel(id: &str) -> Result<()> {
+    pub fn unblock_channel(id: &str) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
-        let conn = db.conn.lock().unwrap();
-        conn.execute("DELETE FROM blocked_channels WHERE id = ?1", params![id])?;
+        let mut conn = db.conn.lock().unwrap();
+        
+        diesel::delete(blocked_channels::table.filter(blocked_channels::id.eq(id)))
+            .execute(&mut *conn)?;
+            
         Ok(())
     }
 
     /// Check if a channel is blocked
-    pub fn is_blocked(id: &str) -> Result<bool> {
+    pub fn is_blocked(id: &str) -> std::result::Result<bool, Box<dyn std::error::Error>> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
-        let conn = db.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT 1 FROM blocked_channels WHERE id = ?1")?;
-        let exists = stmt.exists(params![id])?;
-        Ok(exists)
+        let mut conn = db.conn.lock().unwrap();
+        
+        let count: i64 = blocked_channels::table
+            .filter(blocked_channels::id.eq(id))
+            .count()
+            .get_result(&mut *conn)?;
+            
+        Ok(count > 0)
     }
 
     /// Retrieves all blocked channels as a HashSet for quick lookup
-    pub fn get_all_blocked_channels() -> Result<HashSet<String>> {
+    pub fn get_all_blocked_channels() -> std::result::Result<HashSet<String>, Box<dyn std::error::Error>> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
-        let conn = db.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT id FROM blocked_channels")?;
-
-        let blocked = stmt.query_map([], |row| row.get(0))?;
-
-        let mut set = HashSet::new();
-        for id in blocked {
-            set.insert(id?);
-        }
-
-        Ok(set)
+        let mut conn = db.conn.lock().unwrap();
+        
+        let channels: Vec<String> = blocked_channels::table
+            .select(blocked_channels::id)
+            .load(&mut *conn)?;
+            
+        Ok(channels.into_iter().collect())
     }
 
     // ─── Blocked playlists ──────────────────────────────────────────────────────
 
     /// Block a playlist by its ID
-    pub fn block_playlist(id: &str) -> Result<()> {
+    pub fn block_playlist(id: &str) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
-        let conn = db.conn.lock().unwrap();
-        conn.execute(
-            "INSERT OR IGNORE INTO blocked_playlists (id) VALUES (?1)",
-            params![id],
-        )?;
+        let mut conn = db.conn.lock().unwrap();
+        
+        diesel::insert_into(blocked_playlists::table)
+            .values(&BlockedPlaylist { id: id.to_string() })
+            .on_conflict_do_nothing()
+            .execute(&mut *conn)?;
+            
         Ok(())
     }
 
     /// Unblock a playlist by its ID
-    pub fn unblock_playlist(id: &str) -> Result<()> {
+    pub fn unblock_playlist(id: &str) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
-        let conn = db.conn.lock().unwrap();
-        conn.execute("DELETE FROM blocked_playlists WHERE id = ?1", params![id])?;
+        let mut conn = db.conn.lock().unwrap();
+        
+        diesel::delete(blocked_playlists::table.filter(blocked_playlists::id.eq(id)))
+            .execute(&mut *conn)?;
+            
         Ok(())
     }
 
     /// Retrieves all blocked playlists as a HashSet for quick lookup
-    pub fn get_all_blocked_playlists() -> Result<HashSet<String>> {
+    pub fn get_all_blocked_playlists() -> std::result::Result<HashSet<String>, Box<dyn std::error::Error>> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
-        let conn = db.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT id FROM blocked_playlists")?;
-
-        let blocked = stmt.query_map([], |row| row.get(0))?;
-
-        let mut set = HashSet::new();
-        for id in blocked {
-            set.insert(id?);
-        }
-
-        Ok(set)
+        let mut conn = db.conn.lock().unwrap();
+        
+        let playlists: Vec<String> = blocked_playlists::table
+            .select(blocked_playlists::id)
+            .load(&mut *conn)?;
+            
+        Ok(playlists.into_iter().collect())
     }
 
     // ─── Subscriptions ──────────────────────────────────────────────────────────
@@ -202,189 +139,130 @@ impl DatabaseManager {
     /// Insert or update a subscription and its videos atomically.
     /// The `tags` field on `SubItem` is NOT written here —
     /// use `tag_subscription` / `untag_subscription` for tags.
-    pub fn upsert_subscription(item: &crate::global::structs::SubItem) -> Result<()> {
+    pub fn upsert_subscription(item: &crate::global::structs::SubItem) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
-        let conn = db.conn.lock().unwrap();
-        conn.execute(
-            "INSERT INTO subscriptions
-                (channel_id, name, thumbnail_url, last_sync, last_sync_channel, has_new)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT(channel_id) DO UPDATE SET
-                name = excluded.name,
-                thumbnail_url = excluded.thumbnail_url,
-                last_sync = excluded.last_sync,
-                last_sync_channel = excluded.last_sync_channel,
-                has_new = excluded.has_new",
-            params![
-                item.channel.id,
-                item.channel.name,
-                item.channel.thumbnail_url,
-                item.last_sync as i64,
-                item.last_sync_channel as i64,
-                item.has_new as i64,
-            ],
-        )?;
+        let mut conn = db.conn.lock().unwrap();
+        
+        conn.transaction::<_, Box<dyn std::error::Error>, _>(|conn| {
+            let sub = Subscription {
+                channel_id: item.channel.id.clone(),
+                name: item.channel.name.clone(),
+                thumbnail_url: item.channel.thumbnail_url.clone(),
+                last_sync: item.last_sync as i64,
+                last_sync_channel: item.last_sync_channel as i64,
+                has_new: if item.has_new { 1 } else { 0 },
+            };
 
-        // Replace videos for this channel
-        conn.execute(
-            "DELETE FROM videos WHERE channel_id = ?1",
-            params![item.channel.id],
-        )?;
-        for video in &item.videos {
-            conn.execute(
-                "INSERT INTO videos (id, channel_id, title, thumbnail_url, length, views, channel_name, published, timestamp, description)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![
-                    video.id,
-                    item.channel.id,
-                    video.title,
-                    video.thumbnail_url,
-                    video.length,
-                    video.views,
-                    video.channel,
-                    video.published,
-                    video.timestamp.map(|t| t as i64),
-                    video.description,
-                ],
-            )?;
-        }
+            diesel::insert_into(subscriptions::table)
+                .values(&sub)
+                .on_conflict(subscriptions::channel_id)
+                .do_update()
+                .set((
+                    subscriptions::name.eq(&sub.name),
+                    subscriptions::thumbnail_url.eq(&sub.thumbnail_url),
+                    subscriptions::last_sync.eq(sub.last_sync),
+                    subscriptions::last_sync_channel.eq(sub.last_sync_channel),
+                    subscriptions::has_new.eq(sub.has_new),
+                ))
+                .execute(conn)?;
+
+            diesel::delete(videos::table.filter(videos::channel_id.eq(&item.channel.id)))
+                .execute(conn)?;
+
+            let new_videos: Vec<Video> = item.videos.iter().map(|video| Video {
+                id: video.id.clone(),
+                channel_id: item.channel.id.clone(),
+                title: video.title.clone(),
+                thumbnail_url: video.thumbnail_url.clone(),
+                length: video.length.clone(),
+                views: video.views.clone(),
+                channel_name: video.channel.clone(),
+                published: video.published.clone(),
+                timestamp: video.timestamp.map(|t| t as i64),
+                description: video.description.clone(),
+            }).collect();
+
+            // Insert in chunks of 50 to respect SQLite variable limits safely
+            for chunk in new_videos.chunks(50) {
+                diesel::insert_into(videos::table)
+                    .values(chunk)
+                    .execute(conn)?;
+            }
+            Ok(())
+        })?;
 
         Ok(())
     }
 
     /// Remove a subscription (and all its tags/videos via CASCADE).
-    pub fn remove_subscription(channel_id: &str) -> Result<bool> {
+    pub fn remove_subscription(channel_id_val: &str) -> std::result::Result<bool, Box<dyn std::error::Error>> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
-        let conn = db.conn.lock().unwrap();
-        let rows = conn.execute(
-            "DELETE FROM subscriptions WHERE channel_id = ?1",
-            params![channel_id],
-        )?;
+        let mut conn = db.conn.lock().unwrap();
+        
+        let rows = diesel::delete(subscriptions::table.filter(subscriptions::channel_id.eq(channel_id_val)))
+            .execute(&mut *conn)?;
+            
         Ok(rows > 0)
     }
 
     /// Returns true if the channel is already in the subscriptions table.
-    pub fn is_subscribed(channel_id: &str) -> Result<bool> {
+    pub fn is_subscribed(channel_id_val: &str) -> std::result::Result<bool, Box<dyn std::error::Error>> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
-        let conn = db.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT 1 FROM subscriptions WHERE channel_id = ?1")?;
-        stmt.exists(params![channel_id])
+        let mut conn = db.conn.lock().unwrap();
+        
+        let count: i64 = subscriptions::table
+            .filter(subscriptions::channel_id.eq(channel_id_val))
+            .count()
+            .get_result(&mut *conn)?;
+            
+        Ok(count > 0)
     }
 
     /// Load all subscriptions (with their tags) from the database.
     /// Each returned `SubItem` has `tags` populated.
-    pub fn get_all_subscriptions() -> Result<Vec<crate::global::structs::SubItem>> {
+    pub fn get_all_subscriptions() -> std::result::Result<Vec<crate::global::structs::SubItem>, Box<dyn std::error::Error>> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
-        let conn = db.conn.lock().unwrap();
+        let mut conn = db.conn.lock().unwrap();
 
-        // Load all subscriptions
-        let mut sub_stmt = conn.prepare(
-            "SELECT channel_id, name, thumbnail_url, last_sync, last_sync_channel, has_new
-             FROM subscriptions",
-        )?;
-        let sub_rows: Vec<(String, String, String, i64, i64, bool)> = sub_stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, i64>(5)? != 0,
-                ))
-            })?
-            .collect::<Result<Vec<_>>>()?;
+        let subs: Vec<Subscription> = subscriptions::table.load(&mut *conn)?;
+        let tags: Vec<SubscriptionTag> = subscription_tags::table
+            .order_by((subscription_tags::channel_id.asc(), subscription_tags::tag.asc()))
+            .load(&mut *conn)?;
+        let mut vids: Vec<Video> = videos::table
+            .order_by(videos::timestamp.desc())
+            .load(&mut *conn)?;
 
-        // Load all tags
-        let mut tag_stmt =
-            conn.prepare("SELECT channel_id, tag FROM subscription_tags ORDER BY channel_id, tag")?;
-        let tag_pairs: Vec<(String, String)> = tag_stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-            .collect::<Result<Vec<_>>>()?;
-
-        // Load all videos grouped by channel_id
-        let mut vid_stmt = conn.prepare(
-            "SELECT channel_id, id, title, thumbnail_url, length, views, channel_name, published, timestamp, description
-             FROM videos ORDER BY timestamp DESC",
-        )?;
-        let vid_rows: Vec<(
-            String,
-            String,
-            String,
-            String,
-            String,
-            Option<String>,
-            String,
-            Option<String>,
-            Option<i64>,
-            Option<String>,
-        )> = vid_stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, Option<String>>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, Option<String>>(7)?,
-                    row.get::<_, Option<i64>>(8)?,
-                    row.get::<_, Option<String>>(9)?,
-                ))
-            })?
-            .collect::<Result<Vec<_>>>()?;
-
-        // Build tag map
-        let mut tag_map: std::collections::HashMap<String, Vec<String>> =
-            std::collections::HashMap::new();
-        for (cid, tag) in tag_pairs {
-            tag_map.entry(cid).or_default().push(tag);
+        let mut tag_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        for t in tags {
+            tag_map.entry(t.channel_id).or_default().push(t.tag);
         }
 
-        // Build videos-by-channel map
-        let mut videos_by_channel: std::collections::HashMap<
-            String,
-            Vec<crate::global::structs::MiniVideoItem>,
-        > = std::collections::HashMap::new();
-        for (
-            channel_id,
-            vid_id,
-            title,
-            thumbnail_url,
-            length,
-            views,
-            channel_name,
-            published,
-            timestamp,
-            description,
-        ) in vid_rows
-        {
+        let mut videos_by_channel: std::collections::HashMap<String, Vec<crate::global::structs::MiniVideoItem>> = std::collections::HashMap::new();
+        for v in vids.drain(..) {
             videos_by_channel
-                .entry(channel_id.clone())
+                .entry(v.channel_id.clone())
                 .or_default()
                 .push(crate::global::structs::MiniVideoItem {
-                    id: vid_id,
-                    title,
-                    thumbnail_url,
-                    length,
-                    views,
-                    channel: channel_name,
-                    channel_id,
-                    published,
-                    timestamp: timestamp.map(|t| t as u64),
-                    description,
+                    id: v.id,
+                    title: v.title,
+                    thumbnail_url: v.thumbnail_url,
+                    length: v.length,
+                    views: v.views,
+                    channel: v.channel_name,
+                    channel_id: v.channel_id,
+                    published: v.published,
+                    timestamp: v.timestamp.map(|t| t as u64),
+                    description: v.description,
                 });
         }
 
-        // Assemble SubItems
-        let mut items = Vec::with_capacity(sub_rows.len());
-        for (channel_id, name, thumbnail_url, last_sync, last_sync_channel, has_new) in sub_rows {
+        let mut items = Vec::with_capacity(subs.len());
+        for sub in subs {
             use crate::global::structs::{FullChannelItem, SubItem};
             let channel = FullChannelItem {
-                id: channel_id.clone(),
-                name,
-                thumbnail_url,
+                id: sub.channel_id.clone(),
+                name: sub.name,
+                thumbnail_url: sub.thumbnail_url,
                 sub_count: 0,
                 sub_count_text: String::new(),
                 total_views: String::new(),
@@ -392,15 +270,15 @@ impl DatabaseManager {
                 autogenerated: false,
                 description: String::new(),
             };
-            let tags = tag_map.remove(&channel_id).unwrap_or_default();
-            let videos = videos_by_channel.remove(&channel_id).unwrap_or_default();
+            let tags = tag_map.remove(&sub.channel_id).unwrap_or_default();
+            let videos = videos_by_channel.remove(&sub.channel_id).unwrap_or_default();
 
             items.push(SubItem {
                 channel,
                 videos,
-                last_sync: last_sync as u64,
-                last_sync_channel: last_sync_channel as u64,
-                has_new,
+                last_sync: sub.last_sync as u64,
+                last_sync_channel: sub.last_sync_channel as u64,
+                has_new: sub.has_new != 0,
                 tags,
             });
         }
@@ -409,57 +287,28 @@ impl DatabaseManager {
     }
 
     /// Get all videos across all subscriptions, sorted by timestamp descending.
-    pub fn get_all_videos() -> Result<Vec<crate::global::structs::MiniVideoItem>> {
+    pub fn get_all_videos() -> std::result::Result<Vec<crate::global::structs::MiniVideoItem>, Box<dyn std::error::Error>> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
-        let conn = db.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, title, thumbnail_url, length, views, channel_name, published, timestamp, description
-             FROM videos ORDER BY timestamp DESC",
-        )?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, Option<String>>(6)?,
-                    row.get::<_, Option<i64>>(7)?,
-                    row.get::<_, Option<String>>(8)?,
-                ))
-            })?
-            .collect::<Result<Vec<_>>>()?;
+        let mut conn = db.conn.lock().unwrap();
+        
+        let vids: Vec<Video> = videos::table
+            .order_by(videos::timestamp.desc())
+            .load(&mut *conn)?;
 
-        Ok(rows
+        Ok(vids
             .into_iter()
-            .map(
-                |(
-                    id,
-                    title,
-                    thumbnail_url,
-                    length,
-                    views,
-                    channel,
-                    published,
-                    timestamp,
-                    description,
-                )| {
-                    crate::global::structs::MiniVideoItem {
-                        id,
-                        title,
-                        thumbnail_url,
-                        length,
-                        views,
-                        channel,
-                        channel_id: String::new(),
-                        published,
-                        timestamp: timestamp.map(|t| t as u64),
-                        description,
-                    }
-                },
-            )
+            .map(|v| crate::global::structs::MiniVideoItem {
+                id: v.id,
+                title: v.title,
+                thumbnail_url: v.thumbnail_url,
+                length: v.length,
+                views: v.views,
+                channel: v.channel_name,
+                channel_id: String::new(),
+                published: v.published,
+                timestamp: v.timestamp.map(|t| t as u64),
+                description: v.description,
+            })
             .collect())
     }
 
@@ -467,41 +316,51 @@ impl DatabaseManager {
 
     /// Add a tag to an existing subscription. Returns an error if the channel
     /// is not subscribed.
-    pub fn tag_subscription(channel_id: &str, tag: &str) -> Result<()> {
+    pub fn tag_subscription(channel_id_val: &str, tag_val: &str) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
-        let conn = db.conn.lock().unwrap();
-        conn.execute(
-            "INSERT OR IGNORE INTO subscription_tags (channel_id, tag) VALUES (?1, ?2)",
-            params![channel_id, tag],
-        )?;
+        let mut conn = db.conn.lock().unwrap();
+        
+        diesel::insert_into(subscription_tags::table)
+            .values(&SubscriptionTag {
+                channel_id: channel_id_val.to_string(),
+                tag: tag_val.to_string(),
+            })
+            .on_conflict_do_nothing()
+            .execute(&mut *conn)?;
+            
         Ok(())
     }
 
     /// Remove a tag from a subscription.
-    pub fn untag_subscription(channel_id: &str, tag: &str) -> Result<bool> {
+    pub fn untag_subscription(channel_id_val: &str, tag_val: &str) -> std::result::Result<bool, Box<dyn std::error::Error>> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
-        let conn = db.conn.lock().unwrap();
-        let rows = conn.execute(
-            "DELETE FROM subscription_tags WHERE channel_id = ?1 AND tag = ?2",
-            params![channel_id, tag],
-        )?;
+        let mut conn = db.conn.lock().unwrap();
+        
+        let rows = diesel::delete(
+            subscription_tags::table
+                .filter(subscription_tags::channel_id.eq(channel_id_val))
+                .filter(subscription_tags::tag.eq(tag_val))
+        )
+        .execute(&mut *conn)?;
         Ok(rows > 0)
     }
 
     /// Get all tags for a subscription.
-    pub fn get_tags_for(channel_id: &str) -> Result<Vec<String>> {
+    pub fn get_tags_for(channel_id_val: &str) -> std::result::Result<Vec<String>, Box<dyn std::error::Error>> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
-        let conn = db.conn.lock().unwrap();
-        let mut stmt =
-            conn.prepare("SELECT tag FROM subscription_tags WHERE channel_id = ?1 ORDER BY tag")?;
-        let tags = stmt
-            .query_map(params![channel_id], |row| row.get(0))?
-            .collect::<Result<Vec<_>>>()?;
+        let mut conn = db.conn.lock().unwrap();
+        
+        let tags: Vec<String> = subscription_tags::table
+            .filter(subscription_tags::channel_id.eq(channel_id_val))
+            .order_by(subscription_tags::tag.asc())
+            .select(subscription_tags::tag)
+            .load(&mut *conn)?;
+            
         Ok(tags)
     }
 
     /// Get all subscriptions that have a specific tag.
-    pub fn get_subscriptions_by_tag(tag: &str) -> Result<Vec<crate::global::structs::SubItem>> {
+    pub fn get_subscriptions_by_tag(tag: &str) -> std::result::Result<Vec<crate::global::structs::SubItem>, Box<dyn std::error::Error>> {
         let all = Self::get_all_subscriptions()?;
         Ok(all
             .into_iter()
@@ -511,35 +370,46 @@ impl DatabaseManager {
 
     // ─── Search History ──────────────────────────────────────────────────────────
 
-    pub fn get_search_history() -> Result<Vec<String>> {
+    pub fn get_search_history() -> std::result::Result<Vec<String>, Box<dyn std::error::Error>> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
-        let conn = db.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT query FROM search_history ORDER BY created_at DESC")?;
-        let items = stmt
-            .query_map([], |row| row.get(0))?
-            .collect::<Result<Vec<_>>>()?;
+        let mut conn = db.conn.lock().unwrap();
+        
+        let items: Vec<String> = search_history::table
+            .order_by(search_history::created_at.desc())
+            .select(search_history::query)
+            .load(&mut *conn)?;
+            
         Ok(items)
     }
 
-    pub fn add_search_history(query: &str) -> Result<()> {
+    pub fn add_search_history(query_val: &str) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
-        let conn = db.conn.lock().unwrap();
-        conn.execute(
-            "INSERT OR REPLACE INTO search_history (query, created_at) VALUES (?1, strftime('%s', 'now'))",
-            params![query],
-        )?;
+        let mut conn = db.conn.lock().unwrap();
+        
+        diesel::insert_into(search_history::table)
+            .values(&SearchHistoryEntry {
+                query: query_val.to_string(),
+                created_at: chrono::Utc::now().timestamp(),
+            })
+            .on_conflict(search_history::query)
+            .do_update()
+            .set(search_history::created_at.eq(chrono::Utc::now().timestamp()))
+            .execute(&mut *conn)?;
+            
         Ok(())
     }
 
-    pub fn trim_search_history(limit: usize) -> Result<()> {
+    pub fn trim_search_history(limit: usize) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = unsafe { DATABASE.get() }.expect("Database not initialized");
-        let conn = db.conn.lock().unwrap();
-        conn.execute(
+        let mut conn = db.conn.lock().unwrap();
+
+        let l = limit as i64;
+        sql_query(format!(
             "DELETE FROM search_history WHERE rowid NOT IN (
-                SELECT rowid FROM search_history ORDER BY created_at DESC LIMIT ?1
-            )",
-            params![limit as i64],
-        )?;
+                SELECT rowid FROM search_history ORDER BY created_at DESC LIMIT {}
+            )", l
+        ))
+        .execute(&mut *conn)?;
         Ok(())
     }
 }
@@ -547,600 +417,112 @@ impl DatabaseManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::global::structs::{FullChannelItem, MiniVideoItem, SubItem};
+    use diesel::sqlite::SqliteConnection;
+    use diesel::prelude::*;
 
-    fn with_test_db<F>(f: F)
-    where
-        F: FnOnce(&Connection),
-    {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "
-            PRAGMA foreign_keys = ON;
-            CREATE TABLE subscriptions (
-                channel_id        TEXT PRIMARY KEY,
-                name              TEXT NOT NULL DEFAULT '',
-                thumbnail_url     TEXT NOT NULL DEFAULT '',
-                last_sync         INTEGER NOT NULL DEFAULT 0,
-                last_sync_channel INTEGER NOT NULL DEFAULT 0,
-                has_new           INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE subscription_tags (
-                channel_id TEXT NOT NULL REFERENCES subscriptions(channel_id) ON DELETE CASCADE,
-                tag        TEXT NOT NULL,
-                PRIMARY KEY (channel_id, tag)
-            );
-            CREATE TABLE videos (
-                id            TEXT PRIMARY KEY,
-                channel_id    TEXT NOT NULL REFERENCES subscriptions(channel_id) ON DELETE CASCADE,
-                title         TEXT NOT NULL DEFAULT '',
-                thumbnail_url TEXT NOT NULL DEFAULT '',
-                length        TEXT NOT NULL DEFAULT '',
-                views         TEXT,
-                channel_name  TEXT NOT NULL DEFAULT '',
-                published     TEXT,
-                timestamp     INTEGER,
-                description   TEXT
-            );
-            CREATE TABLE search_history (
-                query      TEXT PRIMARY KEY,
-                created_at INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE blocked_channels (id TEXT PRIMARY KEY);
-            CREATE TABLE blocked_playlists (id TEXT PRIMARY KEY);
-            ",
-        )
-        .unwrap();
-
+    // A small helper to initialize the global DB once for all tests.
+    fn setup_test_db() {
+        let mut conn = SqliteConnection::establish(":memory:").unwrap();
+        conn.run_pending_migrations(MIGRATIONS).unwrap();
+        
         unsafe {
+            // Force replace if already set, because Rust tests run in parallel or independently
+            // and we might need it, but we can't easily reset OnceLock without nightly.
             let _ = DATABASE.set(DatabaseManager {
-                conn: Mutex::new(Connection::open_in_memory().unwrap()),
+                conn: std::sync::Mutex::new(conn),
             });
         }
-
-        f(&conn);
     }
 
-    fn with_db_global<F>(f: F)
-    where
-        F: FnOnce(),
-    {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "
-            PRAGMA foreign_keys = ON;
-            CREATE TABLE subscriptions (
-                channel_id        TEXT PRIMARY KEY,
-                name              TEXT NOT NULL DEFAULT '',
-                thumbnail_url     TEXT NOT NULL DEFAULT '',
-                last_sync         INTEGER NOT NULL DEFAULT 0,
-                last_sync_channel INTEGER NOT NULL DEFAULT 0,
-                has_new           INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE subscription_tags (
-                channel_id TEXT NOT NULL REFERENCES subscriptions(channel_id) ON DELETE CASCADE,
-                tag        TEXT NOT NULL,
-                PRIMARY KEY (channel_id, tag)
-            );
-            CREATE TABLE videos (
-                id            TEXT PRIMARY KEY,
-                channel_id    TEXT NOT NULL REFERENCES subscriptions(channel_id) ON DELETE CASCADE,
-                title         TEXT NOT NULL DEFAULT '',
-                thumbnail_url TEXT NOT NULL DEFAULT '',
-                length        TEXT NOT NULL DEFAULT '',
-                views         TEXT,
-                channel_name  TEXT NOT NULL DEFAULT '',
-                published     TEXT,
-                timestamp     INTEGER,
-                description   TEXT
-            );
-            CREATE TABLE search_history (
-                query      TEXT PRIMARY KEY,
-                created_at INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE blocked_channels (id TEXT PRIMARY KEY);
-            CREATE TABLE blocked_playlists (id TEXT PRIMARY KEY);
-            ",
-        )
-        .unwrap();
-
-        unsafe {
-            let _ = DATABASE.set(DatabaseManager {
-                conn: Mutex::new(Connection::open_in_memory().unwrap()),
-            });
-        }
-
-        fn with_test_db<F>(f: F)
-        where
-            F: FnOnce(&Connection),
-        {
-            let conn = Connection::open_in_memory().unwrap();
-            conn.execute_batch(
-                "
-            PRAGMA foreign_keys = ON;
-            CREATE TABLE subscriptions (
-                channel_id        TEXT PRIMARY KEY,
-                name              TEXT NOT NULL DEFAULT '',
-                thumbnail_url     TEXT NOT NULL DEFAULT '',
-                last_sync         INTEGER NOT NULL DEFAULT 0,
-                last_sync_channel INTEGER NOT NULL DEFAULT 0,
-                has_new           INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE subscription_tags (
-                channel_id TEXT NOT NULL REFERENCES subscriptions(channel_id) ON DELETE CASCADE,
-                tag        TEXT NOT NULL,
-                PRIMARY KEY (channel_id, tag)
-            );
-            CREATE TABLE videos (
-                id            TEXT PRIMARY KEY,
-                channel_id    TEXT NOT NULL REFERENCES subscriptions(channel_id) ON DELETE CASCADE,
-                title         TEXT NOT NULL DEFAULT '',
-                thumbnail_url TEXT NOT NULL DEFAULT '',
-                length        TEXT NOT NULL DEFAULT '',
-                views         TEXT,
-                channel_name  TEXT NOT NULL DEFAULT '',
-                published     TEXT,
-                timestamp     INTEGER,
-                description   TEXT
-            );
-            CREATE TABLE search_history (
-                query      TEXT PRIMARY KEY,
-                created_at INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE blocked_channels (id TEXT PRIMARY KEY);
-            CREATE TABLE blocked_playlists (id TEXT PRIMARY KEY);
-            ",
-            )
-            .unwrap();
-
-            unsafe {
-                let _ = DATABASE.set(DatabaseManager {
-                    conn: Mutex::new(Connection::open_in_memory().unwrap()),
-                });
-            }
-
-            f(&conn);
-        }
-
-        // ─── Blocked channels ────────────────────────────────────────────────────
-
-        #[test]
-        fn block_unblock_channel() {
-            with_test_db(|conn| {
-                conn.execute("INSERT INTO blocked_channels (id) VALUES ('ch1')", [])
-                    .unwrap();
-
-                let mut stmt = conn
-                    .prepare("SELECT id FROM blocked_channels ORDER BY id")
-                    .unwrap();
-                let ids: Vec<String> = stmt
-                    .query_map([], |row| row.get(0))
-                    .unwrap()
-                    .map(|r| r.unwrap())
-                    .collect();
-                assert_eq!(ids, vec!["ch1"]);
-
-                conn.execute("DELETE FROM blocked_channels WHERE id = 'ch1'", [])
-                    .unwrap();
-                let count: i64 = conn
-                    .query_row("SELECT COUNT(*) FROM blocked_channels", [], |row| {
-                        row.get(0)
-                    })
-                    .unwrap();
-                assert_eq!(count, 0);
-            });
-        }
-
-        // ─── Videos ───────────────────────────────────────────────────────────────
-
-        #[test]
-        fn upsert_and_get_videos() {
-            with_test_db(|conn| {
-                conn.execute(
-                "INSERT INTO subscriptions (channel_id, name, thumbnail_url, last_sync, last_sync_channel, has_new)
-                 VALUES ('ch1', 'Test Channel', '', 0, 0, 0)",
-                [],
-            )
-            .unwrap();
-
-                conn.execute(
-                "INSERT INTO videos (id, channel_id, title, thumbnail_url, length, views, channel_name, timestamp)
-                 VALUES ('v1', 'ch1', 'Video 1', '', '10:00', '1K views', 'Test Channel', 1000)",
-                [],
-            )
-            .unwrap();
-                conn.execute(
-                "INSERT INTO videos (id, channel_id, title, thumbnail_url, length, views, channel_name, timestamp)
-                 VALUES ('v2', 'ch1', 'Video 2', '', '5:00', '500 views', 'Test Channel', 2000)",
-                [],
-            )
-            .unwrap();
-
-                // Verify order (by timestamp DESC)
-                let mut stmt = conn
-                .prepare("SELECT id, title, timestamp FROM videos WHERE channel_id = 'ch1' ORDER BY timestamp DESC")
-                .unwrap();
-                let rows: Vec<(String, String, i64)> = stmt
-                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-                    .unwrap()
-                    .map(|r| r.unwrap())
-                    .collect();
-
-                assert_eq!(rows.len(), 2);
-                assert_eq!(rows[0].0, "v2"); // newer first
-                assert_eq!(rows[0].1, "Video 2");
-                assert_eq!(rows[1].0, "v1");
-            });
-        }
-
-        #[test]
-        fn videos_cascade_delete_on_unsubscribe() {
-            with_test_db(|conn| {
-                conn.execute(
-                    "INSERT INTO subscriptions (channel_id, name) VALUES ('ch1', 'Test')",
-                    [],
-                )
-                .unwrap();
-                conn.execute(
-                    "INSERT INTO videos (id, channel_id, title) VALUES ('v1', 'ch1', 'Vid')",
-                    [],
-                )
-                .unwrap();
-                conn.execute("DELETE FROM subscriptions WHERE channel_id = 'ch1'", [])
-                    .unwrap();
-
-                let count: i64 = conn
-                    .query_row(
-                        "SELECT COUNT(*) FROM videos WHERE channel_id = 'ch1'",
-                        [],
-                        |row| row.get(0),
-                    )
-                    .unwrap();
-                assert_eq!(count, 0);
-            });
-        }
-
-        // ─── Tags ────────────────────────────────────────────────────────────────
-
-        #[test]
-        fn tag_and_untag_subscription() {
-            with_test_db(|conn| {
-                conn.execute(
-                    "INSERT INTO subscriptions (channel_id, name) VALUES ('ch1', 'Test')",
-                    [],
-                )
-                .unwrap();
-
-                conn.execute(
-                    "INSERT INTO subscription_tags (channel_id, tag) VALUES ('ch1', 'music')",
-                    [],
-                )
-                .unwrap();
-                conn.execute(
-                    "INSERT INTO subscription_tags (channel_id, tag) VALUES ('ch1', 'tech')",
-                    [],
-                )
-                .unwrap();
-
-                let mut stmt = conn
-                    .prepare(
-                        "SELECT tag FROM subscription_tags WHERE channel_id = 'ch1' ORDER BY tag",
-                    )
-                    .unwrap();
-                let tags: Vec<String> = stmt
-                    .query_map([], |row| row.get(0))
-                    .unwrap()
-                    .map(|r| r.unwrap())
-                    .collect();
-                assert_eq!(tags, vec!["music", "tech"]);
-
-                conn.execute(
-                    "DELETE FROM subscription_tags WHERE channel_id = 'ch1' AND tag = 'music'",
-                    [],
-                )
-                .unwrap();
-                let remaining: i64 = conn
-                    .query_row(
-                        "SELECT COUNT(*) FROM subscription_tags WHERE channel_id = 'ch1'",
-                        [],
-                        |row| row.get(0),
-                    )
-                    .unwrap();
-                assert_eq!(remaining, 1);
-            });
-        }
-
-        // ─── Search history ──────────────────────────────────────────────────────
-
-        #[test]
-        fn search_history_replace_on_duplicate() {
-            with_test_db(|conn| {
-                conn.execute(
-                    "INSERT INTO search_history (query, created_at) VALUES ('rust tutorial', 1000)",
-                    [],
-                )
-                .unwrap();
-                // Simulate INSERT OR REPLACE behavior
-                conn.execute(
-                "INSERT OR REPLACE INTO search_history (query, created_at) VALUES ('rust tutorial', 2000)",
-                [],
-            )
-            .unwrap();
-
-                let count: i64 = conn
-                    .query_row("SELECT COUNT(*) FROM search_history", [], |row| row.get(0))
-                    .unwrap();
-                assert_eq!(count, 1);
-
-                let timestamp: i64 = conn
-                    .query_row(
-                        "SELECT created_at FROM search_history WHERE query = 'rust tutorial'",
-                        [],
-                        |row| row.get(0),
-                    )
-                    .unwrap();
-                assert_eq!(timestamp, 2000);
-            });
-        }
-
-        #[test]
-        fn search_history_trim_keeps_newest() {
-            with_test_db(|conn| {
-                for i in 0..10 {
-                    conn.execute(
-                        &format!(
-                            "INSERT INTO search_history (query, created_at) VALUES ('query{}', {})",
-                            i,
-                            1000 + i
-                        ),
-                        [],
-                    )
-                    .unwrap();
+    #[test]
+    fn test_all_db_operations() {
+        setup_test_db();
+        
+        // 1. Blocked channels
+        DatabaseManager::block_channel("ch1").unwrap();
+        assert!(DatabaseManager::is_blocked("ch1").unwrap());
+        assert!(!DatabaseManager::is_blocked("ch2").unwrap());
+        
+        let blocked = DatabaseManager::get_all_blocked_channels().unwrap();
+        assert!(blocked.contains("ch1"));
+        
+        DatabaseManager::unblock_channel("ch1").unwrap();
+        assert!(!DatabaseManager::is_blocked("ch1").unwrap());
+        
+        // 2. Playlists
+        DatabaseManager::block_playlist("pl1").unwrap();
+        let blocked_pls = DatabaseManager::get_all_blocked_playlists().unwrap();
+        assert!(blocked_pls.contains("pl1"));
+        DatabaseManager::unblock_playlist("pl1").unwrap();
+        
+        // 3. Subscriptions
+        let sub = SubItem {
+            channel: FullChannelItem {
+                id: "sub1".to_string(),
+                name: "My Channel".to_string(),
+                thumbnail_url: "thumb".to_string(),
+                sub_count: 0,
+                sub_count_text: "".to_string(),
+                total_views: "".to_string(),
+                created: "".to_string(),
+                autogenerated: false,
+                description: "".to_string(),
+            },
+            videos: vec![
+                MiniVideoItem {
+                    id: "vid1".to_string(),
+                    title: "Vid 1".to_string(),
+                    thumbnail_url: "".to_string(),
+                    length: "1:00".to_string(),
+                    views: Some("1".to_string()),
+                    channel: "My Channel".to_string(),
+                    channel_id: "sub1".to_string(),
+                    published: None,
+                    timestamp: Some(100),
+                    description: None,
                 }
-
-                // Trim to 5
-                conn.execute(
-                    "DELETE FROM search_history WHERE rowid NOT IN (
-                    SELECT rowid FROM search_history ORDER BY created_at DESC LIMIT 5
-                )",
-                    [],
-                )
-                .unwrap();
-
-                let count: i64 = conn
-                    .query_row("SELECT COUNT(*) FROM search_history", [], |row| row.get(0))
-                    .unwrap();
-                assert_eq!(count, 5);
-
-                // Oldest remaining should be query5 (timestamp 1005)
-                let oldest: i64 = conn
-                    .query_row(
-                        "SELECT created_at FROM search_history ORDER BY created_at ASC LIMIT 1",
-                        [],
-                        |row| row.get(0),
-                    )
-                    .unwrap();
-                assert_eq!(oldest, 1005);
-            });
-        }
-
-        // ─── Subscriptions ───────────────────────────────────────────────────────
-
-        #[test]
-        fn upsert_subscription_updates_fields() {
-            with_test_db(|conn| {
-                // First insert
-                conn.execute(
-                "INSERT INTO subscriptions (channel_id, name, thumbnail_url, last_sync, last_sync_channel, has_new)
-                 VALUES ('ch1', 'Channel 1', 'http://thumb1', 1000, 0, 1)",
-                [],
-            )
-            .unwrap();
-
-                // Update with upsert-like logic
-                conn.execute(
-                "INSERT INTO subscriptions (channel_id, name, thumbnail_url, last_sync, last_sync_channel, has_new)
-                 VALUES ('ch1', 'Channel 1 Updated', 'http://thumb2', 2000, 2000, 0)
-                 ON CONFLICT(channel_id) DO UPDATE SET
-                    name = excluded.name,
-                    thumbnail_url = excluded.thumbnail_url,
-                    last_sync = excluded.last_sync,
-                    last_sync_channel = excluded.last_sync_channel,
-                    has_new = excluded.has_new",
-                [],
-            )
-            .unwrap();
-
-                let name: String = conn
-                    .query_row(
-                        "SELECT name FROM subscriptions WHERE channel_id = 'ch1'",
-                        [],
-                        |row| row.get(0),
-                    )
-                    .unwrap();
-                assert_eq!(name, "Channel 1 Updated");
-
-                let last_sync: i64 = conn
-                    .query_row(
-                        "SELECT last_sync FROM subscriptions WHERE channel_id = 'ch1'",
-                        [],
-                        |row| row.get(0),
-                    )
-                    .unwrap();
-                assert_eq!(last_sync, 2000);
-            });
-        }
-
-        #[test]
-        fn get_all_subscriptions_loads_tags_and_videos() {
-            with_test_db(|conn| {
-                conn.execute(
-                "INSERT INTO subscriptions (channel_id, name) VALUES ('ch1', 'C1'), ('ch2', 'C2')",
-                [],
-            )
-            .unwrap();
-                conn.execute(
-                "INSERT INTO subscription_tags (channel_id, tag) VALUES ('ch1', 'music'), ('ch1', 'rock'), ('ch2', 'tech')",
-                [],
-            )
-            .unwrap();
-                conn.execute(
-                "INSERT INTO videos (id, channel_id, title, thumbnail_url, length, channel_name, timestamp)
-                 VALUES ('v1', 'ch1', 'Vid 1', '', '5:00', 'C1', 3000),
-                        ('v2', 'ch1', 'Vid 2', '', '3:00', 'C1', 2000),
-                        ('v3', 'ch2', 'Vid 3', '', '10:00', 'C2', 1000)",
-                [],
-            )
-            .unwrap();
-
-                // Verify sub count
-                let count: i64 = conn
-                    .query_row("SELECT COUNT(*) FROM subscriptions", [], |row| row.get(0))
-                    .unwrap();
-                assert_eq!(count, 2);
-
-                // Verify tags per channel
-                let ch1_tags: i64 = conn
-                    .query_row(
-                        "SELECT COUNT(*) FROM subscription_tags WHERE channel_id = 'ch1'",
-                        [],
-                        |row| row.get(0),
-                    )
-                    .unwrap();
-                assert_eq!(ch1_tags, 2);
-
-                // Verify videos per channel
-                let ch1_videos: i64 = conn
-                    .query_row(
-                        "SELECT COUNT(*) FROM videos WHERE channel_id = 'ch1'",
-                        [],
-                        |row| row.get(0),
-                    )
-                    .unwrap();
-                assert_eq!(ch1_videos, 2);
-            });
-        }
-
-        #[test]
-        fn upsert_and_load_preserves_video_metadata() {
-            with_test_db(|_conn| {
-                let item = crate::global::structs::SubItem {
-                    channel: crate::global::structs::FullChannelItem {
-                        id: "ch_test_001".to_string(),
-                        name: "Test Channel".to_string(),
-                        thumbnail_url: "http://thumb".to_string(),
-                        sub_count: 0,
-                        sub_count_text: String::new(),
-                        total_views: String::new(),
-                        created: String::new(),
-                        autogenerated: false,
-                        description: String::new(),
-                    },
-                    videos: vec![
-                        crate::global::structs::MiniVideoItem {
-                            id: "vid_001".to_string(),
-                            title: "Test Video 1".to_string(),
-                            thumbnail_url: "http://vid_thumb".to_string(),
-                            length: "10:30".to_string(),
-                            views: Some("1.2K views".to_string()),
-                            channel: "Test Channel".to_string(),
-                            channel_id: "ch_test_001".to_string(),
-                            published: Some("Jan 1 [2024]".to_string()),
-                            timestamp: Some(1704067200),
-                            description: Some("Test desc".to_string()),
-                        },
-                        crate::global::structs::MiniVideoItem {
-                            id: "vid_002".to_string(),
-                            title: "Test Video 2".to_string(),
-                            thumbnail_url: "http://vid_thumb2".to_string(),
-                            length: "5:00".to_string(),
-                            views: None,
-                            channel: "Test Channel".to_string(),
-                            channel_id: "ch_test_001".to_string(),
-                            published: None,
-                            timestamp: Some(1703980800),
-                            description: None,
-                        },
-                    ],
-                    last_sync: 1704067200,
-                    last_sync_channel: 1704067200,
-                    has_new: true,
-                    tags: vec!["test".to_string()],
-                };
-
-                crate::global::structs::DatabaseManager::upsert_subscription(&item).unwrap();
-
-                let loaded =
-                    crate::global::structs::DatabaseManager::get_all_subscriptions().unwrap();
-                assert_eq!(loaded.len(), 1);
-                let loaded_item = &loaded[0];
-
-                assert_eq!(loaded_item.videos.len(), 2);
-                let vid = &loaded_item.videos[0];
-                assert_eq!(vid.id, "vid_001");
-                assert_eq!(vid.channel, "Test Channel");
-                assert_eq!(vid.channel_id, "ch_test_001");
-                assert_eq!(vid.length, "10:30");
-                assert_eq!(vid.views, Some("1.2K views".to_string()));
-                assert_eq!(vid.timestamp, Some(1704067200));
-                assert_eq!(vid.published, Some("Jan 1 [2024]".to_string()));
-                assert_eq!(vid.description, Some("Test desc".to_string()));
-
-                let vid2 = &loaded_item.videos[1];
-                assert_eq!(vid2.id, "vid_002");
-                assert!(vid2.length != "00:00", "length should not be default");
-                assert_eq!(vid2.views, None);
-                assert_eq!(vid2.channel_id, "ch_test_001");
-            });
-        }
-
-        #[test]
-        fn get_all_videos_preserves_metadata() {
-            with_test_db(|_conn| {
-                let item = crate::global::structs::SubItem {
-                    channel: crate::global::structs::FullChannelItem {
-                        id: "ch_ga_001".to_string(),
-                        name: "GA Channel".to_string(),
-                        thumbnail_url: "".to_string(),
-                        sub_count: 0,
-                        sub_count_text: String::new(),
-                        total_views: String::new(),
-                        created: String::new(),
-                        autogenerated: false,
-                        description: String::new(),
-                    },
-                    videos: vec![crate::global::structs::MiniVideoItem {
-                        id: "ga_vid1".to_string(),
-                        title: "GA Video".to_string(),
-                        thumbnail_url: "".to_string(),
-                        length: "2:30".to_string(),
-                        views: Some("500 views".to_string()),
-                        channel: "GA Channel".to_string(),
-                        channel_id: "ch_ga_001".to_string(),
-                        published: Some("Dec 25 [2023]".to_string()),
-                        timestamp: Some(1703558400),
-                        description: Some("GA description".to_string()),
-                    }],
-                    last_sync: 1703558400,
-                    last_sync_channel: 1703558400,
-                    has_new: false,
-                    tags: vec!["ga".to_string()],
-                };
-
-                crate::global::structs::DatabaseManager::upsert_subscription(&item).unwrap();
-
-                let videos = crate::global::structs::DatabaseManager::get_all_videos().unwrap();
-                assert_eq!(videos.len(), 1);
-                let vid = &videos[0];
-                assert_eq!(vid.id, "ga_vid1");
-                assert_eq!(vid.title, "GA Video");
-                assert_eq!(vid.channel, "GA Channel");
-                assert_eq!(vid.length, "2:30");
-                assert_eq!(vid.views, Some("500 views".to_string()));
-                assert_eq!(vid.timestamp, Some(1703558400));
-                assert_eq!(vid.published, Some("Dec 25 [2023]".to_string()));
-                assert_ne!(vid.channel_id, "", "channel_id should not be empty");
-                assert_eq!(vid.channel_id, "ch_ga_001");
-            });
-        }
+            ],
+            last_sync: 200,
+            last_sync_channel: 200,
+            has_new: true,
+            tags: vec![],
+        };
+        
+        DatabaseManager::upsert_subscription(&sub).unwrap();
+        assert!(DatabaseManager::is_subscribed("sub1").unwrap());
+        
+        let subs = DatabaseManager::get_all_subscriptions().unwrap();
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].channel.name, "My Channel");
+        assert_eq!(subs[0].videos.len(), 1);
+        
+        let vids = DatabaseManager::get_all_videos().unwrap();
+        assert_eq!(vids.len(), 1);
+        assert_eq!(vids[0].id, "vid1");
+        
+        // 4. Tags
+        DatabaseManager::tag_subscription("sub1", "tech").unwrap();
+        let tags = DatabaseManager::get_tags_for("sub1").unwrap();
+        assert_eq!(tags, vec!["tech".to_string()]);
+        
+        let sub_by_tag = DatabaseManager::get_subscriptions_by_tag("tech").unwrap();
+        assert_eq!(sub_by_tag.len(), 1);
+        
+        DatabaseManager::untag_subscription("sub1", "tech").unwrap();
+        assert!(DatabaseManager::get_tags_for("sub1").unwrap().is_empty());
+        
+        DatabaseManager::remove_subscription("sub1").unwrap();
+        assert!(!DatabaseManager::is_subscribed("sub1").unwrap());
+        
+        // 5. Search history
+        DatabaseManager::add_search_history("query 1").unwrap();
+        DatabaseManager::add_search_history("query 2").unwrap();
+        let history = DatabaseManager::get_search_history().unwrap();
+        assert_eq!(history.len(), 2);
+        
+        DatabaseManager::trim_search_history(1).unwrap();
+        let history_trimmed = DatabaseManager::get_search_history().unwrap();
+        assert_eq!(history_trimmed.len(), 1);
     }
 }

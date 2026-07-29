@@ -65,6 +65,9 @@
             pkgs.mpv
             pkgs.libsixel
             pkgs.xorg.libxcb
+            pkgs.autoconf
+            pkgs.automake
+            pkgs.libtool
           ];
         };
       }

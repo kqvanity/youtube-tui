@@ -3,6 +3,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::{env, error::Error, io};
 use tui_additions::framework::{Framework, State};
