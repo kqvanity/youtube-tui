@@ -1,8 +1,20 @@
 use std::error::Error;
+
 use crate::items::filter::Filter;
 use crate::{
+    config::*,
+    global::{functions::*, structs::*, traits::SearchProviderWrapper},
+    items::ItemInfo,
+};
 use ratatui::{
+    layout::{Constraint, Rect},
+    style::Style,
+};
 use tui_additions::{
+    framework::{FrameworkClean, FrameworkItem},
+    widgets::{Grid, TextList},
+};
+
 
 use super::*;
 

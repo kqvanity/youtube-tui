@@ -1,10 +1,37 @@
 use ratatui::{
+    layout::{Constraint, Rect},
+    style::Style,
+};
 use tui_additions::{
+    framework::{FrameworkClean, FrameworkItem},
+    widgets::{Grid, TextList},
+};
 use typemap::Key;
+
 use crate::{
+    config::{AppearanceConfig, KeyBindingsConfig, MainConfig, Provider},
+    global::{
+        functions::set_envs,
+        structs::{
+            ChannelDisplayPage, ChannelDisplayPageType, Item, KeyAction, MiniVideoItem, Page,
+            StateEnvs, Status, Subscriptions, Task, Tasks,
+        },
+    },
+};
+
 use super::{ItemInfo, SubSelect};
 
+
 use super::*;
+
+fn get_options(is_channel: bool) -> &'static [&'static str] {
+    // different predefined options to display depending on if "all feeds" is selected
+    if is_channel {
+        &["Sync feed", "View channel", "Remove subscription"]
+    } else {
+        &["Sync all feeds"]
+    }
+}
 
 impl FrameworkItem for VideoList {
     fn message(
