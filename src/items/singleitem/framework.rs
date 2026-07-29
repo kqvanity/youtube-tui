@@ -166,7 +166,8 @@ impl FrameworkItem for SingleItem {
                 self.iteminfo
                     .render(frame, framework, chunks[0], popup_render, info);
                 typeinfo.textlist.set_height(chunks[1].height);
-                frame.render_widget(typeinfo.textlist.clone(), chunks[1]);
+                let padded_chunk1 = chunks[1].inner(ratatui::layout::Margin { vertical: 0, horizontal: 1 });
+                frame.render_widget(typeinfo.textlist.clone(), padded_chunk1);
             }
             SingleItemType::Playlist(typeinfo) => {
                 // 3 by 1 grid if hovering a video inside the playlist
@@ -174,6 +175,7 @@ impl FrameworkItem for SingleItem {
                 //
                 // item info in the first cell, textlists in the second, hovering video on 3rd (if
                 // present)
+                let padded_chunk1 = chunks[1].inner(ratatui::layout::Margin { vertical: 0, horizontal: 1 });
                 if typeinfo.is_commands_view {
                     if status.provider_updated {
                         typeinfo.update_provider().into_iter().for_each(|index| {
@@ -190,11 +192,11 @@ impl FrameworkItem for SingleItem {
                                 )
                         });
                     }
-                    typeinfo.commands_view.set_height(chunks[1].height);
-                    frame.render_widget(typeinfo.commands_view.clone(), chunks[1]);
+                    typeinfo.commands_view.set_height(padded_chunk1.height);
+                    frame.render_widget(typeinfo.commands_view.clone(), padded_chunk1);
                 } else {
-                    typeinfo.videos_view.set_height(chunks[1].height);
-                    frame.render_widget(typeinfo.videos_view.clone(), chunks[1]);
+                    typeinfo.videos_view.set_height(padded_chunk1.height);
+                    frame.render_widget(typeinfo.videos_view.clone(), padded_chunk1);
 
                     if typeinfo.videos_view.selected != 0 {
                         typeinfo.hovered_video.render(

@@ -55,8 +55,10 @@ impl FrameworkItem for ChannelList {
         self.tags_selector.set_height(chunks[0].height);
         self.channels_selector.set_height(chunks[1].height);
 
-        frame.render_widget(self.tags_selector.clone(), chunks[0]);
-        frame.render_widget(self.channels_selector.clone(), chunks[1]);
+        let padded_chunk0 = chunks[0].inner(ratatui::layout::Margin { vertical: 0, horizontal: 1 });
+        let padded_chunk1 = chunks[1].inner(ratatui::layout::Margin { vertical: 0, horizontal: 1 });
+        frame.render_widget(self.tags_selector.clone(), padded_chunk0);
+        frame.render_widget(self.channels_selector.clone(), padded_chunk1);
     }
 
     fn message(

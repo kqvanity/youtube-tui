@@ -10,7 +10,7 @@ use crossterm::event::KeyCode;
 use ratatui::{
     layout::Alignment,
     style::Style,
-    widgets::{Block, Borders},
+    widgets::{Block, Borders, Padding},
 };
 use tui_additions::{framework::FrameworkItem, widgets::TextField};
 
@@ -42,6 +42,7 @@ impl FrameworkItem for SearchBar {
             .title("Search YouTube")
             .title_alignment(Alignment::Center)
             .borders(Borders::ALL)
+            .padding(Padding::horizontal(1))
             .border_type(appearance.borders)
             .border_style(Style::default().fg(if info.hover {
                 appearance.colors.outline_hover

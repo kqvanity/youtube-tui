@@ -4,7 +4,7 @@ use crate::{config::*, global::structs::*};
 use ratatui::{
     layout::Rect,
     style::Style,
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Padding},
 };
 use tui_additions::framework::*;
 
@@ -140,6 +140,7 @@ impl FrameworkItem for MessageBar {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(appearance.borders)
+            .padding(Padding::horizontal(1))
             .border_style(Style::default().fg(if command_capture.is_some() {
                 appearance.colors.command_capture
             } else {

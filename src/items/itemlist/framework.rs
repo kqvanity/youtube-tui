@@ -108,7 +108,8 @@ impl FrameworkItem for ItemList {
         let textlist = self.textlist.clone();
 
         frame.render_widget(grid, area);
-        frame.render_widget(textlist, chunks[0]);
+        let padded_chunk0 = chunks[0].inner(ratatui::layout::Margin { vertical: 0, horizontal: 1 });
+        frame.render_widget(textlist, padded_chunk0);
 
         // used the `.render()` function in self.info because it is an ItemInfo and impls FrameworkItem instead of Widget
         self.info

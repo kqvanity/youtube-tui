@@ -189,7 +189,8 @@ impl FrameworkItem for VideoList {
         }
 
         self.selector.set_height(chunks[1].height);
-        frame.render_widget(self.selector.clone(), chunks[0]);
+        let padded_chunk = chunks[0].inner(ratatui::layout::Margin { vertical: 0, horizontal: 1 });
+        frame.render_widget(self.selector.clone(), padded_chunk);
 
         if self.channel_id.is_some() {
             match self.selector.selected {
